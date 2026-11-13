@@ -412,6 +412,7 @@ private fun RadiantApp() {
         Scaffold(
             containerColor = colors.background,
             snackbarHost = { SnackbarHost(snackbarHostState) },
+            /*
             topBar = {
                 TopAppBar(
                     title = {
@@ -526,6 +527,7 @@ private fun RadiantApp() {
                     },
                 )
             },
+            */
             bottomBar = {
                 if (singlePanel) {
                     NavigationBar(containerColor = colors.surface) {
