@@ -200,6 +200,16 @@ public:
         target.setColour (juce::Label::textColourId, theme::colour::textSecondary);
         target.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (target);
+        toggleBarButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb2"));
+        toggleBarButton.setTooltip (tr ("Hide toolbar"));
+        toggleBarButton.setColour (juce::TextButton::buttonColourId, theme::colour::bg2.withAlpha (0.85f));
+        toggleBarButton.setColour (juce::TextButton::textColourOffId, theme::colour::textSecondary);
+        toggleBarButton.onClick = [this] {
+            barVisible = ! barVisible;
+            resized();
+            repaint();
+        };
+        addAndMakeVisible (toggleBarButton);
 
         if (liveMode)
             startTimerHz (10);
@@ -221,9 +231,42 @@ public:
     void resized() override
     {
         auto area = getLocalBounds();
+        if (! barVisible)
+        {
+            octaveDown.setVisible (false);
+            range.setVisible (false);
+            octaveUp.setVisible (false);
+            sizeBox.setVisible (false);
+            velocityMode.setVisible (false);
+            fixedVelocity.setVisible (false);
+            labels.setVisible (false);
+            target.setVisible (false);
+
+            toggleBarButton.setVisible (true);
+            toggleBarButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xbc"));
+            toggleBarButton.setTooltip (tr ("Show toolbar"));
+            toggleBarButton.setBounds (getWidth() - 34, 4, 28, 22);
+            toggleBarButton.toFront (false);
+
+            keys.setBounds (area);
+            return;
+        }
+
+        toggleBarButton.setVisible (true);
+        toggleBarButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb2"));
+        toggleBarButton.setTooltip (tr ("Hide toolbar"));
+        octaveDown.setVisible (true);
+        range.setVisible (true);
+        octaveUp.setVisible (true);
+        sizeBox.setVisible (true);
+        velocityMode.setVisible (true);
+        labels.setVisible (true);
+        target.setVisible (true);
         if (area.getWidth() < 740)
         {
             auto row1 = area.removeFromTop (34).reduced (8, 4);
+            toggleBarButton.setBounds (row1.removeFromRight (26).reduced (0, 1));
+            row1.removeFromRight (4);
             octaveDown.setBounds (row1.removeFromLeft (30));
             range.setBounds (row1.removeFromLeft (80));
             octaveUp.setBounds (row1.removeFromLeft (30));
@@ -249,6 +292,8 @@ public:
         else
         {
             auto bar = area.removeFromTop (38).reduced (10, 6);
+            toggleBarButton.setBounds (bar.removeFromRight (28).reduced (0, 2));
+            bar.removeFromRight (6);
             octaveDown.setBounds (bar.removeFromLeft (30));
             range.setBounds (bar.removeFromLeft (92));
             octaveUp.setBounds (bar.removeFromLeft (30));
@@ -318,6 +363,8 @@ private:
     juce::ComboBox sizeBox, velocityMode;
     juce::Slider fixedVelocity;
     juce::ToggleButton labels;
+    bool barVisible = true;
+    juce::TextButton toggleBarButton;
 };
 } // namespace
 

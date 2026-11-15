@@ -1,0 +1,136 @@
+]633;E;sed -n '2045,2135p' src/ui/PianoRollComponent.cpp;bc297a77-9e30-479e-ad2e-cab81e63530c]633;C        case Drag::select:
+        case Drag::zoomRange:
+        {
+            if (e.getDistanceFromDragStart() < 3 && rubberBand.isEmpty())
+                return;
+
+            const auto area = gridArea();
+            rubberBand = juce::Rectangle<int> (e.getMouseDownPosition(), e.getPosition()).getIntersection (area);
+
+            if (drag == Drag::zoomRange)
+            {
+                rubberBand = rubberBand.withY (area.getY()).withHeight (area.getHeight());
+                repaint();
+                return;
+            }
+
+            const auto t0 = xToTick (rubberBand.getX()), t1 = xToTick (rubberBand.getRight());
+            const auto kTop = yToKey (rubberBand.getY()), kBottom = yToKey (rubberBand.getBottom());
+            const auto& notes = currentPattern (engine.getSong()).notes;
+            auto s = selectionBefore;
+
+            for (auto i : channelNotes())
+            {
+                const auto& n = notes[(std::size_t) i];
+
+                if ((double) (n.start + n.length) > t0 && (double) n.start < t1 && n.key <= kTop && n.key >= kBottom)
+                    s.push_back (i);
+            }
+
+            setSelection (s);
+            return;
+        }
+
+        case Drag::erase:
+        {
+            // right press-and-hold on empty grid, then drag: a temporary Knife
+            if (e.mods.isRightButtonDown() && startedOnEmpty && ! erasedSomething && ! holdExpired)
+            {
+                if (e.getLengthOfMousePress() >= 350)
+                {
+                    drag = Drag::knife;
+                    knifeFrom = e.getMouseDownPosition();
+                    knifeTo = e.getPosition();
+                    repaint();
+                    return;
+                }
+
+                if (e.getDistanceFromDragStart() > 3)
+                    holdExpired = true; // moved right away: it is an erase stroke
+            }
+
+            bool edge = false;
+            const auto hit = noteAt (e.x, e.y, edge);
+
+            if (hit >= 0)
+            {
+                erasedSomething = true;
+                editNotes ([hit] (Pattern& p) { noteedit::remove (p, { hit }); });
+            }
+            return;
+        }
+
+        case Drag::muting:
+        {
+            bool edge = false;
+            const auto hit = noteAt (e.x, e.y, edge);
+
+            if (hit >= 0 && std::find (touchedNotes.begin(), touchedNotes.end(), hit) == touchedNotes.end())
+            {
+                touchedNotes.push_back (hit);
+                editNotes ([hit, m = muteTarget] (Pattern& p) { p.notes[(std::size_t) hit].muted = m; });
+            }
+            return;
+        }
+
+        case Drag::knife:
+            knifeTo = e.getPosition();
+            repaint();
+            return;
+
+        case Drag::listen:
+            listenAt (e.x);
+            return;
+
+        case Drag::seek:
+            seekAt (e.x, snapOn);
+            return;
+
+        case Drag::drumPaint:
+            drumPaintAt (e.getPosition(), snapOn);
+            return;
+1091-    liveEvents.push (e);
+1092-}
+1093-
+1094-double AudioEngine::songPlayheadTicks() const noexcept
+1095-{
+1096-    const auto tick = juce::jmax (0.0, transport.positionTicks.load (std::memory_order_relaxed));
+1097-    if (song.hasLoop() || liveInput.linearSong.load (std::memory_order_relaxed))
+1098-        return tick;
+1099:    return std::fmod (tick, (double) juce::jmax<std::int64_t> (1, song.songLength()));
+1100-}
+1101-
+1102-double AudioEngine::playheadAdvanceTicks() const noexcept
+1103-{
+1104-    if (! transport.playing.load (std::memory_order_relaxed) || ! clockRunning.load (std::memory_order_relaxed))
+1105-        return 0.0;
+1106-    const auto since = juce::Time::getMillisecondCounterHiRes() - blockTimeMs.load (std::memory_order_acquire);
+1107-    return juce::jlimit (0.0, juce::jmax (0.0, blockDurationMs.load (std::memory_order_relaxed)), since) * clockTicksPerMs.load (std::memory_order_relaxed);
+--
+2366-    // not recorded (its release finds no held note and is ignored too)
+2367-    const auto punch = activePunch.has_value() ? std::vector<PunchRange> { *activePunch } // pre-roll / punch in-out (round 163)
+2368-                       : recordOptions.recordingMarkers && song.mode == PlayMode::song ? punchRanges (song.markers()) : std::vector<PunchRange> {};
+2369-    auto outsidePunch = [this, &punch] (const RecordedEvent& ev) {
+2370-        if (punch.empty() || ! ev.on)
+2371-            return false;
+2372-        auto tick = ev.tick;
+2373-        if (! song.hasLoop() && ! noteTakeLinear)
+2374:            tick = std::fmod (std::max (0.0, tick), (double) std::max<std::int64_t> (1, song.songLength()));
+2375-        return ! inPunchRanges (punch, tick);
+2376-    };
+2377-
+2378-    while (midiRecordQueue.pop (e))
+2379-    {
+2380-        // (count-in notes: onto the start within the catch window, else at their real time; round 170d)
+2381-        if (! recordOptions.recordNotes || ! catchEarlyNote (e, takeCatch) || outsidePunch (e)) // recording filter: notes off
+2382-            continue;
+--
+3281-            }
+3282-
+3283-        transport.signatureCount.store (count, std::memory_order_relaxed);
+3284-        transport.signatureVersion.fetch_add (1, std::memory_order_acq_rel); // even: ready
+3285-    }
+3286-    transport.songMode.store (song.mode == PlayMode::song);
+3287-    transport.loopStart.store ((double) song.loopStart);
+3288-    transport.loopEnd.store ((double) song.loopEnd);
+3289:    transport.songEnd.store ((double) song.songLength());

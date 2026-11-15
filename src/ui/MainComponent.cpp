@@ -1012,18 +1012,27 @@ void MainComponent::resized()
     if (! toolbarLayout.visible)
     {
         const auto row = toolbar.withHeight (h);
-        const auto menu = row.withWidth (juce::jmin (menuWidth + 8, row.getWidth()));
+        const auto menu = row.withWidth (juce::jmin (menuWidth + 8, juce::jmax (0, row.getWidth() - 2 * h - 8)));
         put (menuBar, menu);
+        auto ur = row.withTrimmedLeft (menu.getWidth() + 4);
+        put (undoButton, ur.removeFromLeft (h));
+        ur.removeFromLeft (2);
+        put (redoButton, ur.removeFromLeft (h));
         titleArea = {};
-        placeHintBar (row.withTrimmedLeft (menu.getWidth() + 12).withWidth (juce::jmin (900, row.getWidth() - menu.getWidth() - 12)).reduced (0, 1));
+        placeHintBar (ur.withTrimmedLeft (8).withWidth (juce::jmin (900, juce::jmax (0, ur.getWidth() - 8))).reduced (0, 1));
         fixedToolbarArea = bar;
     }
     else
     {
         auto column = take (hintWidth);
-        const auto menu = column.withY (row1).withHeight (h).removeFromLeft (juce::jmin (menuWidth + 8, column.getWidth()));
+        auto row1Rect = column.withY (row1).withHeight (h);
+        const auto menu = row1Rect.removeFromLeft (juce::jmin (menuWidth + 8, juce::jmax (0, row1Rect.getWidth() - 2 * h - 8)));
         put (menuBar, menu);
-        titleArea = column.withY (row1).withHeight (h).withTrimmedLeft (menu.getWidth() + 12).withTrimmedRight (4);
+        row1Rect.removeFromLeft (4);
+        put (undoButton, row1Rect.removeFromLeft (h));
+        row1Rect.removeFromLeft (2);
+        put (redoButton, row1Rect.removeFromLeft (h));
+        titleArea = row1Rect.withTrimmedLeft (8).withTrimmedRight (4);
         if (titleArea.getWidth() < 60)
             titleArea = {};
         placeHintBar (column.withY (row2).withHeight (h).reduced (0, 1));
@@ -1051,7 +1060,7 @@ void MainComponent::resized()
                         hide ({ &b });
                     hide ({ &pluginPickerButton });
                     break;
-                case Group::file: hide ({ &newButton, &openButton, &saveButton, &exportButton, &undoButton, &redoButton }); break;
+                case Group::file: hide ({ &newButton, &openButton, &saveButton, &exportButton }); break;
                 case Group::meters: hide ({ &perfMeter }); break;
                 case Group::output: hide ({ &output }); break;
                 case Group::count_: break;
@@ -1148,8 +1157,8 @@ void MainComponent::resized()
                                &panelButtons[(std::size_t) Panel::pianoRoll], &panelButtons[(std::size_t) Panel::mixer],
                                &panelButtons[(std::size_t) Panel::browser], &pluginPickerButton });
                 break;
-            case Group::file: // new, open, save over export, undo, redo
-                grid (panel, { &newButton, &openButton, &saveButton, &exportButton, &undoButton, &redoButton });
+            case Group::file: // new, open, save over export
+                grid (panel, { &newButton, &openButton, &saveButton, &exportButton }, 2);
                 break;
             case Group::meters: put (perfMeter, panel.withY (row1).withHeight (2 * h + 2)); break;
             case Group::output: put (output, panel.withY (row1).withHeight (2 * h + 2)); break;

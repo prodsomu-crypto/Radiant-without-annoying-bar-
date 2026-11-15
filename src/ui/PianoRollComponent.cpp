@@ -1,3 +1,4 @@
+#include "core/MidiControls.h"
 #include "ui/FlMods.h"
 #include "ui/FileChoosers.h"
 #include "ui/PianoRollComponent.h"
@@ -1000,7 +1001,8 @@ void PianoRollComponent::paint (juce::Graphics& g)
             g.drawRect (rubberBand);
         }
 
-        if (drag == Drag::knife)
+        creatingNote = false;
+    if (drag == Drag::knife)
         {
             juce::Path cut;
             cut.startNewSubPath (knifeFrom.toFloat());
@@ -1480,6 +1482,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     downMods = e.mods;
     startedOnEmpty = erasedSomething = holdExpired = false;
     touchCreatedNote = false;
+    creatingNote = false;
 
     const auto onKeyboard = e.x < keyboardWidth && e.y >= headerHeight && e.y < gridArea().getBottom();
     hover = {};
@@ -1567,7 +1570,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     {
         // pattern events: drag draws one event per grid step, right-drag erases
         lastVelocityX = e.x;
-        drag = e.mods.isRightButtonDown() ? Drag::eventErase : Drag::eventDraw;
+        drag = (e.mods.isRightButtonDown() || tools.getTool() == EditTool::eraser) ? Drag::eventErase : Drag::eventDraw;
         drawEvents (e.x, e.x, e.y, drag == Drag::eventErase);
         return;
     }
@@ -1914,6 +1917,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     if (added.size() > 1)
         setSelection (added);
     drag = Drag::move;
+    creatingNote = true;
     grabOffset = 0;
     previewOn (n.key, n.velocity);
 }
@@ -1928,6 +1932,23 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
         const juce::MouseEvent& event;
         ~PostAfter() { roll.postDragHint (event); }
     } postAfter { *this, e };
+
+    if (drag == Drag::move && creatingNote && ! dragIndices.empty() && ! dragOriginals.empty())
+    {
+        if (e.getDistanceFromDragStart() < 6)
+            return;
+        const auto anchor = dragOriginals.front().start;
+        const auto rawEnd = snapOn ? snap (xToTick (e.x) + (double) gridTicks(), true) : (std::int64_t) std::llround (xToTick (e.x));
+        const auto minLen = snapOn ? juce::jmax<std::int64_t> (1, gridTicks()) : (std::int64_t) 1;
+        const auto newLen = juce::jmax (minLen, rawEnd - anchor);
+        lastLength = newLen;
+        editNotes ([&] (Pattern& p) {
+            for (std::size_t k = 0; k < dragIndices.size(); ++k)
+                if (dragIndices[k] >= 0 && dragIndices[k] < (int) p.notes.size())
+                    p.notes[(std::size_t) dragIndices[k]].length = newLen;
+        }, false);
+        return;
+    }
 
     switch (drag)
     {
@@ -4204,7 +4225,14 @@ void PianoRollComponent::changeListenerCallback (juce::ChangeBroadcaster*)
 
 std::optional<AutomationTarget> PianoRollComponent::eventLaneTarget() const
 {
-    const auto k = laneBox.getSelectedId() - eventLaneIdBase;
+    const auto id = laneBox.getSelectedId();
+    if (id >= ccLaneIdBase && id < ccLaneIdBase + 130)
+    {
+        const auto idx = id - ccLaneIdBase;
+        const auto param = idx < 128 ? (midictl::ccBase + idx) : (idx == 128 ? midictl::pitchBendBase : midictl::pressureBase);
+        return AutomationTarget { AutomationTargetKind::channelParam, engine.getSelectedChannel(), 0, param };
+    }
+    const auto k = id - eventLaneIdBase;
     if (k >= 0 && k < (int) eventTargets.size())
         return eventTargets[(std::size_t) k];
     return std::nullopt;
@@ -4230,13 +4258,44 @@ void PianoRollComponent::rebuildLaneBox (std::optional<AutomationTarget> shown, 
     laneBox.addItem (tr ("Velocity"), 1);
     laneBox.addItem (tr ("Pan"), 2);
     laneBox.addItem (tr ("Fine pitch"), 3);
+    laneBox.addSectionHeading (tr ("Pinned MIDI CCs"));
+    static constexpr int pinnedCcs[] = { 11, 1, 64, 7, 10, 2, 74, 71 };
+    for (int cc : pinnedCcs)
+    {
+        const char* cname = midictl::ccName (cc);
+        const auto label = cname && *cname ? ("CC #" + juce::String (cc) + " - " + juce::String (cname)) : ("CC #" + juce::String (cc));
+        laneBox.addItem (label, ccLaneIdBase + cc);
+    }
+    laneBox.addItem (tr ("Pitch Bend"), ccLaneIdBase + 128);
+    laneBox.addItem (tr ("Channel Aftertouch"), ccLaneIdBase + 129);
+    if (auto* root = laneBox.getRootMenu())
+    {
+        juce::PopupMenu allCc;
+        for (int g = 0; g < 4; ++g)
+        {
+            juce::PopupMenu sub;
+            for (int cc = g * 32; cc < (g + 1) * 32; ++cc)
+            {
+                const char* cname = midictl::ccName (cc);
+                const auto label = cname && *cname ? ("CC #" + juce::String (cc) + " - " + juce::String (cname)) : ("CC #" + juce::String (cc));
+                sub.addItem (ccLaneIdBase + cc, label);
+            }
+            allCc.addSubMenu ("CC " + juce::String (g * 32) + "-" + juce::String ((g + 1) * 32 - 1), sub);
+        }
+        root->addSubMenu (tr ("All MIDI CCs (0-127)"), allCc);
+    }
     if (! eventTargets.empty())
         laneBox.addSectionHeading (tr ("Pattern events"));
     for (int k = 0; k < (int) eventTargets.size(); ++k)
         laneBox.addItem (describeAutomationTarget (engine, eventTargets[(std::size_t) k]), eventLaneIdBase + k);
-    auto id = previous >= 1 && previous <= 3 ? previous : 1;
+    auto id = (previous >= 1 && previous <= 3) || (previous >= ccLaneIdBase && previous < ccLaneIdBase + 130) ? previous : 1;
     if (shown)
-        id = eventLaneIdBase + (int) (std::find (eventTargets.begin(), eventTargets.end(), *shown) - eventTargets.begin());
+    {
+        if (shown->kind == AutomationTargetKind::channelParam && shown->index == engine.getSelectedChannel() && midictl::isCc (shown->param))
+            id = ccLaneIdBase + (shown->param - midictl::ccBase);
+        else
+            id = eventLaneIdBase + (int) (std::find (eventTargets.begin(), eventTargets.end(), *shown) - eventTargets.begin());
+    }
     laneBox.setSelectedId (id, juce::dontSendNotification);
 }
 

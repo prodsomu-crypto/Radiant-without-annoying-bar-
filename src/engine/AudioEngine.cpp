@@ -1094,7 +1094,7 @@ void AudioEngine::stopSound()
 double AudioEngine::songPlayheadTicks() const noexcept
 {
     const auto tick = juce::jmax (0.0, transport.positionTicks.load (std::memory_order_relaxed));
-    if (song.hasLoop() || liveInput.linearSong.load (std::memory_order_relaxed))
+    if (! transport.playing.load (std::memory_order_relaxed) || song.hasLoop() || liveInput.linearSong.load (std::memory_order_relaxed))
         return tick;
     return std::fmod (tick, (double) juce::jmax<std::int64_t> (1, song.songLength()));
 }

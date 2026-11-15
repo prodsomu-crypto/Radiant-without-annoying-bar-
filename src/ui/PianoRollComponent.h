@@ -328,6 +328,7 @@ private:
     float laneSetValue = 0.0f;
     // pattern event lanes in the lane box (ids eventLaneIdBase + k; REA round 146)
     static constexpr int eventLaneIdBase = 100;
+    static constexpr int ccLaneIdBase = 1000;
     std::vector<AutomationTarget> eventTargets;
     void rebuildLaneBox (std::optional<AutomationTarget> shown = std::nullopt, bool force = false);
     void drawEvents (int fromX, int toX, int y, bool erase);
@@ -384,6 +385,7 @@ private:
     bool resizeFromLeft = true;       // the left edge of a note resizes it (Ctrl+Alt+Home turns it off)
     bool startedOnEmpty = false, erasedSomething = false, holdExpired = false;
     bool touchCreatedNote = false;
+    bool creatingNote = false;
     double rowHeightFloat = 14.0;
     juce::uint32 lastTouchTapMs = 0;
     juce::Point<int> lastTouchTapPos;

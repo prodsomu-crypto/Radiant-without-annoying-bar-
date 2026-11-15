@@ -1034,7 +1034,7 @@ void PlaylistComponent::paint (juce::Graphics& g)
         if (! song.playlist.empty())
         {
             const auto endX = (float) tickToX ((double) song.songLength());
-            g.setColour (colour::bg0.withAlpha (0.45f));
+            g.setColour (colour::bg0.withAlpha (0.14f));
             g.fillRect (juce::Rectangle<float> (endX, (float) grid.getY(), (float) grid.getRight() - endX, (float) grid.getHeight()));
         }
 
