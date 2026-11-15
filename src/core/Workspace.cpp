@@ -9,7 +9,7 @@ namespace lynx::workspace
 {
 namespace
 {
-const char* const ids[panelCount] = { "playlist", "channelRack", "pianoRoll", "mixer", "browser" };
+const char* const ids[panelCount] = { "playlist", "channelRack", "pianoRoll", "mixer", "browser", "touchKeyboard" };
 
 Rect clampInto (Rect r, int width, int height)
 {
@@ -86,10 +86,13 @@ Layout Layout::makeDefault (int width, int height)
     const auto rollHeight = tiledRoll >= pianoRollMinHeight ? tiledRoll : std::max (minHeight, h * 58 / 100);
     l[Panel::pianoRoll] = state ({ browserWidth + 2 * gap, rollTop, w - browserWidth - 4 * gap, rollHeight }, false);
 
+    const auto kbHeight = std::clamp (h * 34 / 100, 175, 250);
+    l[Panel::touchKeyboard] = state ({ browserWidth + gap, h - kbHeight - gap / 2, w - browserWidth - 2 * gap, kbHeight }, false);
+
     for (auto& p : l.panels)
         p.bounds = clampInto (p.bounds, w, h);
 
-    l.order = { Panel::playlist, Panel::browser, Panel::mixer, Panel::pianoRoll, Panel::channelRack };
+    l.order = { Panel::playlist, Panel::browser, Panel::mixer, Panel::pianoRoll, Panel::channelRack, Panel::touchKeyboard };
     l.focused = Panel::channelRack;
     return l;
 }

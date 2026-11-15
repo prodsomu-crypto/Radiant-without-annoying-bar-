@@ -15,6 +15,9 @@ class AudioEngine;
 void toggleTouchKeyboard (AudioEngine& engine);
 bool isTouchKeyboardOpen();
 
+// Live panel component for embedding in Workspace.
+std::unique_ptr<juce::Component> makeLiveTouchKeyboard (AudioEngine& engine);
+
 // The content for --snapshot mode (`pressed` keys drawn as held, nothing is played).
 std::unique_ptr<juce::Component> makeTouchKeyboardPanel (AudioEngine& engine);
 } // namespace lynx

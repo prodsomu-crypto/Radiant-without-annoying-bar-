@@ -517,11 +517,13 @@ private:
     static constexpr int rackFilterBoxWidth = 108;
     static constexpr int rackTitleToolsWidth = rackPatternSelectorWidth + 6 + rackFilterBoxWidth + 4 + 26 + 4 + rackLengthBoxWidth + 4 + 24 + 4 + 24 + 4 + 24 + 4 + 24 + 4 + 24;
     // one icon per workspace panel (F5..F9): click toggles, right-click shows it maximized
+    std::unique_ptr<juce::Component> touchKeyboardView;
     std::array<IconButton, workspace::panelCount> panelButtons { IconButton { "playlistPanel", Icon::playlist },
                                                                  IconButton { "rackPanel", Icon::channelRack },
                                                                  IconButton { "pianoRollPanel", Icon::pianoRoll },
                                                                  IconButton { "mixerPanel", Icon::mixer },
-                                                                 IconButton { "browserPanel", Icon::browser } };
+                                                                 IconButton { "browserPanel", Icon::browser },
+                                                                 IconButton { "touchKeyboardPanel", Icon::keyboard } };
     IconButton pluginPickerButton { "pluginPicker", Icon::pluginPicker };
     GlobalGridBox gridBox; // global grid of the editors (see ui/EditorTools.h)
     // FL's Snap panel: the magnet before the snap box (TToolbarForm.SnapLabel, a click toggles the snap like Backspace;

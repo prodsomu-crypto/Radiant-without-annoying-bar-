@@ -671,6 +671,8 @@ void Workspace::show (Panel panel)
 
 void Workspace::hide (Panel panel)
 {
+    if (panel == Panel::touchKeyboard)
+        touchKeyboardOverlay = false;
     layout.hide (panel);
     applyLayout();
 }
@@ -882,14 +884,69 @@ void Workspace::showOnlyPanel (Panel panel)
     pristine = false;
     restoredState.clear();
     pendingState.clear();
+    if (panel == Panel::touchKeyboard)
+    {
+        toggleTouchKeyboardOverlay();
+        return;
+    }
+
     for (int i = 0; i < workspace::panelCount; ++i)
     {
+        const auto p = (Panel) i;
         auto& state = layout.panels[(std::size_t) i];
-        state.visible = (Panel) i == panel;
-        state.maximised = (Panel) i == panel;
+        if (p == Panel::touchKeyboard)
+        {
+            state.visible = touchKeyboardOverlay;
+            state.maximised = false;
+            state.detached = false;
+            continue;
+        }
+        state.visible = p == panel;
+        state.maximised = p == panel;
         state.detached = false;
     }
     layout.show (panel);
+    if (touchKeyboardOverlay)
+    {
+        const auto w = juce::jmax (workspace::minWidth, getWidth());
+        const auto h = juce::jmax (workspace::minHeight, getHeight());
+        auto& kb = layout[Panel::touchKeyboard].bounds;
+        if (kb.w <= 0 || kb.h <= 0 || kb.w > w || kb.h > h)
+        {
+            const auto kbH = juce::jlimit (170, juce::jmax (170, h / 2), h * 36 / 100);
+            kb = { 0, h - kbH, w, kbH };
+        }
+        layout.bringToFront (Panel::touchKeyboard);
+        layout.focused = Panel::touchKeyboard;
+    }
+    applyLayout();
+}
+
+void Workspace::toggleTouchKeyboardOverlay()
+{
+    if (! layoutReady)
+    {
+        layout = workspace::Layout::makeDefault (juce::jmax (1, getWidth()), juce::jmax (1, getHeight()));
+        layoutReady = true;
+    }
+
+    touchKeyboardOverlay = ! touchKeyboardOverlay;
+    auto& state = layout[Panel::touchKeyboard];
+    state.visible = touchKeyboardOverlay;
+    state.maximised = false;
+    state.detached = false;
+    if (touchKeyboardOverlay)
+    {
+        const auto w = juce::jmax (workspace::minWidth, getWidth());
+        const auto h = juce::jmax (workspace::minHeight, getHeight());
+        const auto kbH = juce::jlimit (170, juce::jmax (170, h / 2), h * 36 / 100);
+        state.bounds = { 0, h - kbH, w, kbH };
+        layout.show (Panel::touchKeyboard);
+    }
+    else
+    {
+        layout.hide (Panel::touchKeyboard);
+    }
     applyLayout();
 }
 

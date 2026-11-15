@@ -237,6 +237,12 @@ private:
     int nameDownRow = -1;
     bool nameDragged = false, nameDownAlt = false;
     float nameDragY = 0.0f;
+    struct TouchHoldTimer final : juce::Timer { std::function<void()> onFire; void timerCallback() override { stopTimer(); if (onFire) onFire(); } };
+    TouchHoldTimer touchHoldTimer;
+    int touchHoldRow = -1;
+    juce::Point<int> touchHoldPos;
+    bool touchHoldTriggered = false;
+    void showTouchChannelMenu (int channel);
 
     // hover feedback
     void setHover (Area area, int row, int step);

@@ -315,7 +315,13 @@ private fun RadiantApp() {
         var serviceRequested = false
         var serviceRequestedForPlayback = false
         var serviceRequestedForRecording = false
+        var lastSyncedNativePanel = -1
         while (true) {
+            if (!expanded) {
+                val nativePanel = NativeBridge.getSelectedPanel()
+                if (lastSyncedNativePanel == -1) lastSyncedNativePanel = nativePanel
+                else if (nativePanel != lastSyncedNativePanel) { lastSyncedNativePanel = nativePanel; if (nativePanel in editorPanels.indices && nativePanel != selectedPanel) selectedPanel = nativePanel }
+            }
             when (NativeBridge.takeAndroidStorageAction()) {
                 1 -> openDocumentLauncher.launch(arrayOf("*/*"))
                 2 -> {

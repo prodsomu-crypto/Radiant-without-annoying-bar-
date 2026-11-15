@@ -45,6 +45,8 @@ public:
     void setDetached (Panel panel, bool detached);
     // Android compact mode: one editor fills the workspace while the other editors stay hidden.
     void showOnlyPanel (Panel panel);
+    void toggleTouchKeyboardOverlay();
+    bool isTouchKeyboardOverlayVisible() const noexcept { return touchKeyboardOverlay; }
     void setMobileMode (bool mobile);
     bool isMobileMode() const noexcept { return mobileMode; }
 
@@ -108,7 +110,7 @@ private:
     void setFocusedPanel (Panel panel);
 
     workspace::Layout layout;
-    bool layoutReady = false, persistent = false, mobileMode = false;
+    bool layoutReady = false, persistent = false, mobileMode = false, touchKeyboardOverlay = false;
     // The layout is still LYNX's default (no panel moved or resized by hand, nothing detached or loaded):
     // when the window changes size it takes the default rects for the new size instead of scaling them,
     // so a window that opens small and is then maximised gets a sensible desktop.

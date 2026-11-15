@@ -221,19 +221,49 @@ public:
     void resized() override
     {
         auto area = getLocalBounds();
-        auto bar = area.removeFromTop (38).reduced (10, 6);
-        octaveDown.setBounds (bar.removeFromLeft (30));
-        range.setBounds (bar.removeFromLeft (92));
-        octaveUp.setBounds (bar.removeFromLeft (30));
-        bar.removeFromLeft (12);
-        sizeBox.setBounds (bar.removeFromLeft (124));
-        bar.removeFromLeft (8);
-        velocityMode.setBounds (bar.removeFromLeft (196));
-        bar.removeFromLeft (6);
-        fixedVelocity.setBounds (bar.removeFromLeft (120));
-        bar.removeFromLeft (8);
-        labels.setBounds (bar.removeFromLeft (110));
-        target.setBounds (bar);
+        if (area.getWidth() < 740)
+        {
+            auto row1 = area.removeFromTop (34).reduced (8, 4);
+            octaveDown.setBounds (row1.removeFromLeft (30));
+            range.setBounds (row1.removeFromLeft (80));
+            octaveUp.setBounds (row1.removeFromLeft (30));
+            row1.removeFromLeft (8);
+            sizeBox.setBounds (row1.removeFromLeft (juce::jmin (116, row1.getWidth())));
+            row1.removeFromLeft (6);
+            target.setBounds (row1);
+
+            auto row2 = area.removeFromTop (32).reduced (8, 3);
+            const auto fixedMode = velocityMode.getSelectedItemIndex() == 1;
+            velocityMode.setBounds (row2.removeFromLeft (juce::jmin (158, row2.getWidth())));
+            row2.removeFromLeft (6);
+            fixedVelocity.setVisible (fixedMode && row2.getWidth() >= 90);
+            if (fixedVelocity.isVisible())
+            {
+                fixedVelocity.setBounds (row2.removeFromLeft (juce::jmin (110, row2.getWidth())));
+                row2.removeFromLeft (6);
+            }
+            labels.setVisible (row2.getWidth() >= 80);
+            if (labels.isVisible())
+                labels.setBounds (row2);
+        }
+        else
+        {
+            auto bar = area.removeFromTop (38).reduced (10, 6);
+            octaveDown.setBounds (bar.removeFromLeft (30));
+            range.setBounds (bar.removeFromLeft (92));
+            octaveUp.setBounds (bar.removeFromLeft (30));
+            bar.removeFromLeft (12);
+            sizeBox.setBounds (bar.removeFromLeft (124));
+            bar.removeFromLeft (8);
+            velocityMode.setBounds (bar.removeFromLeft (196));
+            bar.removeFromLeft (6);
+            fixedVelocity.setVisible (true);
+            fixedVelocity.setBounds (bar.removeFromLeft (120));
+            bar.removeFromLeft (8);
+            labels.setVisible (true);
+            labels.setBounds (bar.removeFromLeft (110));
+            target.setBounds (bar);
+        }
         keys.setBounds (area);
     }
 
@@ -311,6 +341,11 @@ void toggleTouchKeyboard (AudioEngine& engine)
             const auto area = main->getScreenBounds();
             window->setTopLeftPosition (area.getCentreX() - window->getWidth() / 2, area.getBottom() - window->getHeight() - 40);
         }
+}
+
+std::unique_ptr<juce::Component> makeLiveTouchKeyboard (AudioEngine& engine)
+{
+    return std::make_unique<TouchKeyboardPanel> (engine, true);
 }
 
 std::unique_ptr<juce::Component> makeTouchKeyboardPanel (AudioEngine& engine)

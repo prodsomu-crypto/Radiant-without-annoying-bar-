@@ -1819,10 +1819,18 @@ void ChannelRackComponent::showEuclideanFill (int channel)
 
 void ChannelRackComponent::mouseDown (const juce::MouseEvent& e)
 {
+    touchHoldTimer.stopTimer(); touchHoldTriggered = false; touchHoldRow = -1;
     int row = 0;
     const auto area = areaAt (e.x, e.y, row);
     const auto& song = engine.getSong();
-
+    if (e.source.isTouch() && ! flmods::popup (e.mods) && row >= 0 && row < (int) song.channels.size() && (area == Area::name || area == Area::select || area == Area::mute || area == Area::pan || area == Area::volume || area == Area::route)) {
+        touchHoldRow = row; touchHoldPos = e.getPosition();
+        touchHoldTimer.onFire = [safe = juce::Component::SafePointer<ChannelRackComponent> (this), row] {
+            if (safe == nullptr || row < 0 || row >= (int) safe->engine.getSong().channels.size()) return;
+            safe->touchHoldTriggered = true; safe->nameDownRow = -1; safe->nameDragged = false; safe->knobDrag = Area::none; safe->selectDownRow = -1; safe->drag.end(); safe->previews.releaseAll(); safe->selectRows ({ row }, row); safe->showTouchChannelMenu (row);
+        };
+        touchHoldTimer.startTimer (450);
+    }
     switch (area)
     {
         case Area::none:
@@ -2013,6 +2021,8 @@ void ChannelRackComponent::mouseDown (const juce::MouseEvent& e)
 
 void ChannelRackComponent::mouseDrag (const juce::MouseEvent& e)
 {
+    if (touchHoldTriggered) return;
+    if (touchHoldTimer.isTimerRunning() && e.getPosition().getDistanceFrom (touchHoldPos) > 12) touchHoldTimer.stopTimer();
     if (loopDragRow >= 0)
     {
         const auto steps = juce::jlimit (1, numSteps(), loopDragStart + juce::roundToInt ((loopDragY - e.position.y) / 6.0f));
@@ -2094,7 +2104,9 @@ void ChannelRackComponent::mouseDrag (const juce::MouseEvent& e)
 
 void ChannelRackComponent::mouseUp (const juce::MouseEvent& e)
 {
-    previews.releaseAll(); // the audition (Ctrl+click) and the steps' previews stop with the button
+    touchHoldTimer.stopTimer();
+    previews.releaseAll();
+    if (touchHoldTriggered) { touchHoldTriggered = false; nameDownRow = -1; nameDragged = false; knobDrag = Area::none; selectDownRow = -1; drag.end(); return; } // the audition (Ctrl+click) and the steps' previews stop with the button
 
     if (nameDownRow >= 0 && ! nameDragged && e.mouseWasClicked())
         toggleEditor (nameDownRow, nameDownAlt);
@@ -2601,6 +2613,23 @@ juce::PopupMenu ChannelRackComponent::buildChannelMenu (int channel)
 void ChannelRackComponent::showChannelMenu (int channel)
 {
     buildChannelMenu (channel).showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition());
+}
+
+void ChannelRackComponent::showTouchChannelMenu (int channel)
+{
+    const auto& song = engine.getSong();
+    if (channel < 0 || channel >= (int) song.channels.size()) return;
+    const auto& c = song.channels[(std::size_t) channel];
+    juce::PopupMenu menu;
+    ui::addItemHeader (menu, tr ("Channel"), juce::String::fromUTF8 (c.name.c_str()), c.colour != 0 ? juce::Colour (c.colour) : juce::Colour());
+    menu.addItem (tr ("Duplicate channel"), [this, channel] { selectRows ({ channel }, channel); cloneSelected(); });
+    menu.addItem (tr ("Delete channel"), (int) song.channels.size() > 1, false, [this, channel] { selectRows ({ channel }, channel); deleteSelected(); });
+    menu.addSeparator();
+    menu.addItem (tr ("Rename and color..."), [this, channel] { rename (channel); });
+    menu.addItem (tr ("Piano Roll"), [this, channel] { selectRows ({ channel }, channel); if (onOpenPianoRoll) onOpenPianoRoll(); });
+    menu.addSeparator();
+    menu.addSubMenu (tr ("More channel options"), buildChannelMenu (channel));
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withTargetScreenArea (localAreaToGlobal (rowBounds (channel))));
 }
 
 juce::String flEngineName (const natives::InstrumentEngine& e)

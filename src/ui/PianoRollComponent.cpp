@@ -1547,7 +1547,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     // TimePanelMouseDown 0xe56bf0, REA_rodada168t.md): Ctrl+drag, a double click held and dragged, the Select tool, or
     // a right-drag (on a Mac Cmd or Control: core/ModifierMap.h)
     if (e.y >= rulerTop && e.y < headerHeight && e.x >= keyboardWidth
-        && ((e.mods.isLeftButtonDown() && (flmods::ctrl (e.mods) || e.getNumberOfClicks() >= 2 || tools.getTool() == EditTool::lasso))
+        && ((e.mods.isLeftButtonDown() && (flmods::ctrl (e.mods) || (! e.source.isTouch() && e.getNumberOfClicks() >= 2) || tools.getTool() == EditTool::lasso))
             || (e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))))
     {
         drag = Drag::rulerSelect;
@@ -1635,6 +1635,36 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     bool rightEdge = false, leftEdge = false;
     auto hit = noteAt (e.x, e.y, rightEdge, leftEdge);
     const auto tool = tools.getTool();
+
+    // Touch double-tap on a note deletes it cleanly
+    if (e.source.isTouch() && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+    {
+        bool dblEdge = false;
+        const auto dblHit = noteAt (e.x, e.y, dblEdge);
+        const auto nowMs = juce::Time::getMillisecondCounter();
+        if (dblHit >= 0 && dblHit == lastTouchTapNote && (nowMs - lastTouchTapMs) < 420
+            && e.getPosition().getDistanceFrom (lastTouchTapPos) < 28 && (nowMs - createdAt) >= 420)
+        {
+            lastTouchTapMs = 0;
+            lastTouchTapNote = -1;
+            previewNotes.releaseAll();
+            drag = Drag::none;
+            setSelection ({});
+            editNotes ([dblHit] (Pattern& p) { noteedit::remove (p, { dblHit }); });
+            return;
+        }
+        if (dblHit >= 0)
+        {
+            lastTouchTapMs = nowMs;
+            lastTouchTapPos = e.getPosition();
+            lastTouchTapNote = dblHit;
+        }
+        else
+        {
+            lastTouchTapMs = 0;
+            lastTouchTapNote = -1;
+        }
+    }
 
     // Touch-friendly right-edge grab zone: makes holding the edge of a note and dragging to resize effortless on tablets
     if (! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods)
@@ -2710,16 +2740,19 @@ void PianoRollComponent::zoomOut (int anchorX)
 void PianoRollComponent::seekAt (int x, bool snapOn)
 {
     const auto& song = engine.getSong();
-    const auto tick = snapOn ? (double) snap (xToTick (x), true) : xToTick (x);
+    const auto tick = juce::jmax (0.0, snapOn ? (double) snap (xToTick (x), true) : xToTick (x));
     const auto target = transportedit::patternSeekTarget (song, song.currentPattern, tick, engine.getTransport().positionTicks.load());
     if (target < 0.0)
     {
-        // Song mode and no clip of this pattern: play the pattern on its own from there
         engine.editSong ([] (Song& s) { s.mode = PlayMode::pattern; }, false);
-        engine.seek (juce::jmax (0.0, tick));
-        return;
+        engine.seek (tick);
     }
-    engine.seek (target);
+    else
+    {
+        engine.seek (target);
+    }
+    playheadTick = tick;
+    repaint();
 }
 
 void PianoRollComponent::listenAt (int x)
@@ -3811,12 +3844,16 @@ void PianoRollComponent::paste()
         return;
     }
 
-    // as in FL: pastes at the same position, already selected for dragging
+    std::int64_t firstStart = clipboard.front().start;
+    for (const auto& n : clipboard) firstStart = std::min (firstStart, n.start);
+    const auto& song = engine.getSong();
+    const auto targetTick = playheadTick >= 0.0 ? (std::int64_t) std::llround (playheadTick) : (song.mode == PlayMode::pattern ? (std::int64_t) std::llround (engine.getTransport().positionTicks.load()) : firstStart);
+    const auto offset = targetTick - firstStart;
     std::vector<int> added;
-    const auto channel = allChannels ? -1 : engine.getSelectedChannel(); // ("All": each note keeps its channel)
-    editNotes ([&added, channel] (Pattern& p) {
-        added = noteedit::paste (p, clipboard, 0, channel);
-        notetools::regroup (p, added); // copies of grouped notes form groups of their own
+    const auto channel = allChannels ? -1 : engine.getSelectedChannel();
+    editNotes ([&added, channel, offset] (Pattern& p) {
+        added = noteedit::paste (p, clipboard, offset, channel);
+        notetools::regroup (p, added);
     });
     setSelection (added);
     sortNotes();
@@ -4285,12 +4322,14 @@ bool PianoRollComponent::playheadFrame (double)
     // the playhead shows while the edited pattern plays: Pattern mode, or a clip of it in Song mode (round 162);
     // stopped in Step edit too (round 170e5): it is where the next played note goes (FL enters step-edit notes at the
     // song position, which it draws in the Piano roll), and it moves a snap step on after each one
-    if ((playing || engine.isStepEdit()) && isShowing())
-    {
+    if (isShowing()) {
         const auto& song = engine.getSong();
-        // (between two audio blocks it moves on at the song's tempo: smooth at 144 Hz, round 174e)
-        tick = transportedit::patternPlayhead (song, song.currentPattern, transport.positionTicks.load() + engine.playheadAdvanceTicks(),
-                                               engine.patternLinearOrigin());
+        if (playing || engine.isStepEdit())
+            tick = transportedit::patternPlayhead (song, song.currentPattern, transport.positionTicks.load() + engine.playheadAdvanceTicks(), engine.patternLinearOrigin());
+        else if (song.mode == PlayMode::pattern)
+            tick = transport.positionTicks.load();
+        else if (playheadTick >= 0.0)
+            tick = playheadTick;
     }
 
     // whenever it moved: the line is anti-aliased, so even a fraction of a pixel shows (zoomed out, a playhead crossing

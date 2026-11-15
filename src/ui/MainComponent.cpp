@@ -90,6 +90,7 @@ const char* panelAction (Panel p)
         case Panel::pianoRoll: return "panel.pianoRoll";
         case Panel::mixer: return "panel.mixer";
         case Panel::browser: return "panel.browser";
+        case Panel::touchKeyboard: return "view.touchKeyboard";
     }
     return "";
 }
@@ -103,6 +104,7 @@ juce::String panelName (Panel p)
         case Panel::pianoRoll: return "Piano Roll";
         case Panel::mixer: return "Mixer";
         case Panel::browser: return "Browser";
+        case Panel::touchKeyboard: return "Touch keyboard";
     }
     return {};
 }
@@ -370,6 +372,8 @@ MainComponent::MainComponent (AudioEngine& e, bool restoreUserSettings)
     workspace.setContent (Panel::pianoRoll, pianoRoll, "Piano Roll", Icon::pianoRoll);
     workspace.setContent (Panel::mixer, mixer, "Mixer", Icon::mixer);
     workspace.setContent (Panel::browser, browser, "Browser", Icon::browser);
+    touchKeyboardView = makeLiveTouchKeyboard (engine);
+    workspace.setContent (Panel::touchKeyboard, *touchKeyboardView, tr ("Touch keyboard"), Icon::keyboard);
     workspace.setTitleTooltip (Panel::channelRack, tr ("Shift+wheel here changes the pattern"));
     // FL keeps the channel filter, the global swing and the graph editor switch in the rack's title bar
     rackFilterBox.text = rack.filterName();
@@ -1204,7 +1208,7 @@ void MainComponent::setAndroidCompactMode (bool compact)
 
 void MainComponent::setAndroidPanel (int panel)
 {
-    androidPanel = juce::jlimit (0, workspace::panelCount - 1, panel);
+    androidPanel = juce::jlimit (0, (int) Panel::browser, panel);
     if (androidCompact)
         workspace.showOnlyPanel ((Panel) androidPanel);
     else
@@ -1464,6 +1468,7 @@ keys::Context MainComponent::focusContext() const
         case Panel::pianoRoll: return keys::Context::pianoRoll;
         case Panel::mixer: return keys::Context::mixer;
         case Panel::browser: return keys::Context::browser;
+        case Panel::touchKeyboard: return keys::Context::global;
     }
     return keys::Context::global;
 }
@@ -1704,7 +1709,7 @@ bool MainComponent::runAction (const std::string& id)
     }
     else if (is ("view.closeUnfocusedWindows")) closeUnfocusedWindows();
     else if (is ("view.alignChannelEditors")) alignAllChannelEditors (engine.getSelectedChannel());
-    else if (is ("view.touchKeyboard")) toggleTouchKeyboard (engine);
+    else if (is ("view.touchKeyboard")) togglePanel (Panel::touchKeyboard);
     else if (is ("view.closePluginWindows") || is ("view.closeWindows"))
     {
         PluginWindows::closeAll();
@@ -2308,6 +2313,12 @@ void MainComponent::togglePanel (Panel panel)
 {
     if (androidCompact)
     {
+        if (panel == Panel::touchKeyboard)
+        {
+            workspace.toggleTouchKeyboardOverlay();
+            refreshPanelButtons();
+            return;
+        }
         setAndroidPanel ((int) panel);
         return;
     }
@@ -2334,6 +2345,13 @@ void MainComponent::showPanel (Panel panel)
 {
     if (androidCompact)
     {
+        if (panel == Panel::touchKeyboard)
+        {
+            if (! workspace.isTouchKeyboardOverlayVisible())
+                workspace.toggleTouchKeyboardOverlay();
+            refreshPanelButtons();
+            return;
+        }
         setAndroidPanel ((int) panel);
         return;
     }
@@ -6092,7 +6110,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int barIndex, const juce::String
                       [this] { toggleSampleBrowser(); });
         menu.addSeparator();
         menu.addItem (tr ("Typing keyboard to piano") + shortcutText ("view.typingPiano"), true, typingPiano, [this] { toggleTypingPiano(); });
-        menu.addItem (tr ("Touch keyboard") + shortcutText ("view.touchKeyboard"), true, isTouchKeyboardOpen(), [this] { toggleTouchKeyboard (engine); });
+        menu.addItem (tr ("Touch keyboard") + shortcutText ("view.touchKeyboard"), true, workspace.isPanelVisible (Panel::touchKeyboard), [this] { togglePanel (Panel::touchKeyboard); });
         {
             // FL's View › Background (audit round 165z-a): the workspace image and colour of Options › Theme
             juce::PopupMenu background;

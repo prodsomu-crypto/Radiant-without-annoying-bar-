@@ -442,6 +442,11 @@ PlaylistComponent::PlaylistComponent (AudioEngine& e)
     blocksView = std::make_unique<PatternBlocksView> (engine, *this);
     addChildComponent (*blocksView);
 
+    copyButton.setFlat (false);
+    copyButton.onClick = [this] { copySelection(); };
+    pasteButton.setFlat (false);
+    pasteButton.onClick = [this] { pasteClips (-1); };
+    for (auto* b : { &copyButton, &pasteButton }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); addAndMakeVisible (*b); }
     grid::fillEditorBox (snapBox);
     snapBox.setTooltip (tr ("Playlist snap (magnet): \"Main\" follows the snap in the toolbar, or pick this window's own; hold Alt while dragging to ignore it"));
     ui::setQuickTip (snapBox, tr ("Playlist snap"));
@@ -897,11 +902,19 @@ void PlaylistComponent::setTitleBarInsets (int left, int right)
 void PlaylistComponent::resized()
 {
     const auto h = toolbarHeight - 6;
-    arrangementBox.setBounds (4 + titleInsetLeft, 3, juce::jmin (150, getWidth() / 5), h);
-    tools.setBounds (arrangementBox.getRight() + 8, 3, tools.getIdealWidth (h), h);
-    snapBox.setBounds (tools.getRight() + 8, 3, 128, h);
-    followButton.setBounds (snapBox.getRight() + 6, 3, h, h);
-    stretchButton.setBounds (followButton.getRight() + 2, 3, h, h);
+    const auto avail = juce::jmax (0, getWidth() - 8 - titleInsetLeft - titleInsetRight);
+    const auto compactBar = avail < 680;
+    copyButton.setText (compactBar ? juce::String() : tr ("Copy"));
+    pasteButton.setText (compactBar ? juce::String() : tr ("Paste"));
+    auto bar = juce::Rectangle<int> (4 + titleInsetLeft, 3, avail, h);
+    auto place = [&bar] (juce::Component& c, int w) { c.setBounds (bar.removeFromLeft (juce::jmin (w, bar.getWidth()))); bar.removeFromLeft (juce::jmin (6, bar.getWidth())); };
+    place (arrangementBox, compactBar ? 88 : juce::jmin (150, getWidth() / 5));
+    place (copyButton, compactBar ? h : copyButton.getIdealWidth (h));
+    place (pasteButton, compactBar ? h : pasteButton.getIdealWidth (h));
+    place (tools, tools.getIdealWidth (h));
+    place (snapBox, compactBar ? 88 : 128);
+    place (followButton, h);
+    place (stretchButton, h);
     overview.setBounds (headerWidth, toolbarHeight, getWidth() - headerWidth - scrollBarSize, overviewHeight);
     const auto blocks = blocksSectionHeight();
     blocksShown = blocks > 0;
@@ -2531,6 +2544,14 @@ void PlaylistComponent::mouseDown (const juce::MouseEvent& e)
     bool rightEdge = false, leftEdge = false;
     const auto hit = clipAt (e.x, e.y, rightEdge, leftEdge);
     const auto tool = tools.getTool();
+    if (e.source.isTouch() && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods)) {
+        const auto nowMs = juce::Time::getMillisecondCounter();
+        if (hit >= 0 && hit == lastTouchTapClip && (nowMs - lastTouchTapMs) < 420 && e.getPosition().getDistanceFrom (lastTouchTapPos) < 28) {
+            lastTouchTapMs = 0; lastTouchTapClip = -1; drag = Drag::none; openClipSource (hit, e.mods.isAltDown()); return;
+        }
+        if (hit >= 0) { lastTouchTapMs = nowMs; lastTouchTapPos = e.getPosition(); lastTouchTapClip = hit; }
+        else { lastTouchTapMs = 0; lastTouchTapClip = -1; }
+    }
 
     // Performance mode (round 165m): while the song plays, a click on a clip of the performance zone launches it (the
     // button's release is the release of the Hold modes) and a right-click stops its track; Ctrl / Alt edit as usual
@@ -5433,7 +5454,7 @@ void PlaylistComponent::pasteClips (std::int64_t at)
     for (const auto& c : clipboard)
         first = juce::jmin (first, c.start);
 
-    const auto target = at >= 0 ? at : playheadTick >= 0.0 ? snap (playheadTick, true) : first;
+    const auto target = at >= 0 ? at : playheadTick >= 0.0 ? (std::int64_t) std::llround (playheadTick) : first;
     std::vector<int> added;
 
     engine.editSong ([&added, target, first] (Song& s) {

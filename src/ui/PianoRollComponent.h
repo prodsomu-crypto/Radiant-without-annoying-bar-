@@ -385,6 +385,9 @@ private:
     bool startedOnEmpty = false, erasedSomething = false, holdExpired = false;
     bool touchCreatedNote = false;
     double rowHeightFloat = 14.0;
+    juce::uint32 lastTouchTapMs = 0;
+    juce::Point<int> lastTouchTapPos;
+    int lastTouchTapNote = -1;
     juce::uint32 createdAt = 0;       // when the last click created a note (a double click there is not an edit)
     std::int64_t nextPaintTick = 0, paintLength = 0;
     bool muteTarget = false;

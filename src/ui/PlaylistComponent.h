@@ -73,7 +73,7 @@ public:
 
     // Double-click on a pattern clip opens it in: 0 = the Piano Roll when it has piano-roll notes, else the
     // Channel Rack; 1 = always the Channel Rack; 2 = always the Piano Roll. Alt+double-click opens the other one.
-    static inline int editPatternsIn = 0;
+    static inline int editPatternsIn = 2;
 
     void paint (juce::Graphics& g) override;
     void paintOverChildren (juce::Graphics& g) override;
@@ -332,7 +332,9 @@ private:
     IconComboBox arrangementBox { Icon::song }; // round 170e2: the arrangement icon names the box
     SnapBox snapBox { true }; // "Main" (the toolbar snap) or this editor's own grid
     ToolStrip tools { true };
-    IconButton followButton { "follow", Icon::follow }; // Follow (auto scrolling) on/off, EditorGlobals (round 162)
+    IconButton copyButton { "copy", Icon::copy, "Copy" };
+    IconButton pasteButton { "paste", Icon::paste, "Paste" };
+    IconButton followButton { "follow", Icon::follow };
     void quantizeClips (double strength); // the selected clips' starts (all clips without a selection)
     // FL 2026's keys 7 / 8 / 9 (round 167k): the selected audio clips' own pitch one semitone down / up, reverse
     void pitchSelectedAudioClips (int semitones);
@@ -346,6 +348,9 @@ private:
 
     Drag drag = Drag::none;
     int dragClip = -1;
+    juce::uint32 lastTouchTapMs = 0;
+    juce::Point<int> lastTouchTapPos;
+    int lastTouchTapClip = -1;
     std::vector<int> dragIndices;
     std::vector<Clip> dragOriginals;
     std::vector<int> selection, selectionBefore;
