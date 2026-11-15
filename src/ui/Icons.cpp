@@ -700,6 +700,16 @@ Shape make (Icon icon)
             polyline (st, { { 17.0f, 4.5f }, { 20.0f, 4.5f }, { 20.0f, 19.5f }, { 17.0f, 19.5f } });
             fi.addEllipse (8.0f, 8.0f, 8.0f, 8.0f);
             break;
+        case Icon::copy: // two overlapping pages
+            roundRect (st, 8.5f, 7.5f, 11.0f, 13.0f, 1.75f);
+            polyline (st, { { 15.5f, 7.5f }, { 15.5f, 5.0f }, { 14.0f, 3.5f }, { 6.0f, 3.5f }, { 4.5f, 5.0f }, { 4.5f, 15.5f }, { 6.0f, 17.0f }, { 8.5f, 17.0f } });
+            break;
+        case Icon::paste: // clipboard with top clip
+            roundRect (st, 5.0f, 5.5f, 14.0f, 15.0f, 2.0f);
+            roundRect (st, 9.0f, 3.5f, 6.0f, 3.5f, 1.0f);
+            line (st, 8.5f, 11.5f, 15.5f, 11.5f);
+            line (st, 8.5f, 15.5f, 13.5f, 15.5f);
+            break;
     }
 
     return s;

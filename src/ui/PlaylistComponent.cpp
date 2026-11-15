@@ -1,4 +1,5 @@
-#include "ui/FlMods.h"
+#include "core/TouchGestureState.h"
+#include "ui/FlMods.h" 
 #include "core/RulerGestures.h"
 #include "ui/ColourPicker.h"
 #include "ui/TrackIcons.h"
@@ -6083,11 +6084,25 @@ void PlaylistComponent::glideFrame()
     repaintScrolled();
 }
 
+void PlaylistComponent::cancelQuickTouch()
+{
+#if JUCE_ANDROID
+    cancelTouchHold();
+#endif
+    drag = Drag::none;
+    dragClip = -1;
+    dragIndices.clear();
+    dragOriginals.clear();
+    rubberBand = {};
+    hover = {};
+    repaint();
+}
+
 void PlaylistComponent::mouseMagnify (const juce::MouseEvent& e, float scale)
 {
     gliding = false;
     const auto factor = gesture::pinchZoomFactor (scale);
-    if (e.mods.isAltDown()) // the track heights, around the pointer
+    if (e.mods.isAltDown() || touchgestures::isVerticalPinch()) // the track heights, around the pointer
     {
         setTrackZoom (trackZoom * factor, e.y);
         return;

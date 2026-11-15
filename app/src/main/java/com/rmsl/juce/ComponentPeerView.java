@@ -188,6 +188,44 @@ public final class ComponentPeerView extends ViewGroup
     private native void handleMouseUp (long host, int index, float x, float y, long time);
     private native void handleAccessibilityHover (long host, int action, float x, float y, long time);
 
+    private boolean twoFingerGesture = false;
+    private int activePrimaryPointerId = -1;
+    private long primaryDownTime = 0;
+    private float primaryDownRawX = 0.0f;
+    private float primaryDownRawY = 0.0f;
+    private float prevMidX = 0.0f;
+    private float prevMidY = 0.0f;
+    private float prevPinchSpan = 0.0f;
+    private float startPinchSpan = 0.0f;
+    private int pinchAxisLocked = 0; // 0 = undecided, 1 = horizontal, 2 = vertical
+
+    private float pointerRawX (MotionEvent event, int pointerIndex)
+    {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            return event.getRawX (pointerIndex);
+        return event.getRawX() + (event.getX (pointerIndex) - event.getX (0));
+    }
+
+    private float pointerRawY (MotionEvent event, int pointerIndex)
+    {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            return event.getRawY (pointerIndex);
+        return event.getRawY() + (event.getY (pointerIndex) - event.getY (0));
+    }
+
+    private void resetTwoFingerAnchor (MotionEvent event)
+    {
+        if (event.getPointerCount() < 2)
+            return;
+        prevMidX = (event.getX (0) + event.getX (1)) * 0.5f;
+        prevMidY = (event.getY (0) + event.getY (1)) * 0.5f;
+        float dx = Math.abs (event.getX (1) - event.getX (0));
+        float dy = Math.abs (event.getY (1) - event.getY (0));
+        prevPinchSpan = (float) Math.hypot (dx, dy);
+        startPinchSpan = prevPinchSpan;
+        pinchAxisLocked = 0;
+    }
+
     @Override
     public boolean onTouchEvent (MotionEvent event)
     {
@@ -196,72 +234,103 @@ public final class ComponentPeerView extends ViewGroup
 
         int action = event.getAction();
         long time = event.getEventTime();
-        int[] screenLocation = new int[2];
-        getLocationOnScreen (screenLocation);
-        float screenX = event.getX() + screenLocation[0];
-        float screenY = event.getY() + screenLocation[1];
 
         switch (action & MotionEvent.ACTION_MASK)
         {
             case MotionEvent.ACTION_DOWN:
-                handleMouseDown (host, event.getPointerId (0), screenX, screenY, time);
+                twoFingerGesture = false;
+                activePrimaryPointerId = event.getPointerId (0);
+                primaryDownTime = time;
+                primaryDownRawX = pointerRawX (event, 0);
+                primaryDownRawY = pointerRawY (event, 0);
+                handleMouseDown (host, activePrimaryPointerId, primaryDownRawX, primaryDownRawY, time);
                 return true;
 
             case MotionEvent.ACTION_CANCEL:
             case MotionEvent.ACTION_UP:
-                handleMouseUp (host, event.getPointerId (0), screenX, screenY, time);
+                if (! twoFingerGesture && activePrimaryPointerId != -1)
+                    handleMouseUp (host, event.getPointerId (0), pointerRawX (event, 0), pointerRawY (event, 0), time);
+                twoFingerGesture = false;
+                activePrimaryPointerId = -1;
+                pinchAxisLocked = 0;
                 return true;
 
             case MotionEvent.ACTION_MOVE:
             {
-                handleMouseDrag (host, event.getPointerId (0), screenX, screenY, time);
-
-                int n = event.getPointerCount();
-
-                if (n > 1)
+                if (twoFingerGesture)
                 {
-                    int point[] = new int[2];
-                    getLocationOnScreen (point);
+                    if (event.getPointerCount() >= 2)
+                    {
+                        float midX = (event.getX (0) + event.getX (1)) * 0.5f;
+                        float midY = (event.getY (0) + event.getY (1)) * 0.5f;
+                        float dMidX = midX - prevMidX;
+                        float dMidY = midY - prevMidY;
+                        prevMidX = midX;
+                        prevMidY = midY;
 
-                    for (int i = 1; i < n; ++i)
-                        handleMouseDrag (host, event.getPointerId (i), event.getX (i) + point[0], event.getY (i) + point[1], time);
+                        float dx = Math.abs (event.getX (1) - event.getX (0));
+                        float dy = Math.abs (event.getY (1) - event.getY (0));
+                        float span = (float) Math.hypot (dx, dy);
+
+                        if (pinchAxisLocked == 0 && Math.abs (span - startPinchSpan) > 16.0f)
+                            pinchAxisLocked = (dy > dx * 1.45f) ? 2 : 1;
+
+                        if (Math.abs (dMidX) > 0.25f || Math.abs (dMidY) > 0.25f)
+                            com.radiant.daw.NativeBridge.handleTouchWheel (host, this, midX, midY, getWidth(), getHeight(), dMidX, dMidY, time);
+
+                        if (prevPinchSpan > 24.0f && span > 24.0f)
+                        {
+                            float scale = span / prevPinchSpan;
+                            if (Math.abs (scale - 1.0f) > 0.002f)
+                                com.radiant.daw.NativeBridge.handleTouchPinch (host, this, midX, midY, getWidth(), getHeight(), scale, pinchAxisLocked == 2, time);
+                        }
+                        prevPinchSpan = span;
+                    }
+                    return true;
                 }
 
+                if (activePrimaryPointerId != -1)
+                {
+                    int idx = event.findPointerIndex (activePrimaryPointerId);
+                    if (idx >= 0)
+                        handleMouseDrag (host, activePrimaryPointerId, pointerRawX (event, idx), pointerRawY (event, idx), time);
+                }
                 return true;
             }
 
             case MotionEvent.ACTION_POINTER_UP:
             {
-                int i = (action & MotionEvent.ACTION_POINTER_INDEX_MASK) >> MotionEvent.ACTION_POINTER_INDEX_SHIFT;
-
-                if (i == 0)
+                if (! twoFingerGesture)
                 {
-                    handleMouseUp (host, event.getPointerId (0), screenX, screenY, time);
-                }
-                else
-                {
-                    int point[] = new int[2];
-                    getLocationOnScreen (point);
-
-                    handleMouseUp (host, event.getPointerId (i), event.getX (i) + point[0], event.getY (i) + point[1], time);
+                    int i = (action & MotionEvent.ACTION_POINTER_INDEX_MASK) >> MotionEvent.ACTION_POINTER_INDEX_SHIFT;
+                    int pid = event.getPointerId (i);
+                    handleMouseUp (host, pid, pointerRawX (event, i), pointerRawY (event, i), time);
+                    if (pid == activePrimaryPointerId)
+                        activePrimaryPointerId = -1;
                 }
                 return true;
             }
 
             case MotionEvent.ACTION_POINTER_DOWN:
             {
-                int i = (action & MotionEvent.ACTION_POINTER_INDEX_MASK) >> MotionEvent.ACTION_POINTER_INDEX_SHIFT;
-
-                if (i == 0)
+                if (event.getPointerCount() >= 2)
                 {
-                    handleMouseDown (host, event.getPointerId (0), screenX, screenY, time);
-                }
-                else
-                {
-                    int point[] = new int[2];
-                    getLocationOnScreen (point);
-
-                    handleMouseDown (host, event.getPointerId (i), event.getX (i) + point[0], event.getY (i) + point[1], time);
+                    if (! twoFingerGesture)
+                    {
+                        twoFingerGesture = true;
+                        if (activePrimaryPointerId != -1)
+                        {
+                            int idx = event.findPointerIndex (activePrimaryPointerId);
+                            float curX = idx >= 0 ? pointerRawX (event, idx) : primaryDownRawX;
+                            float curY = idx >= 0 ? pointerRawY (event, idx) : primaryDownRawY;
+                            float moved = (float) Math.hypot (curX - primaryDownRawX, curY - primaryDownRawY);
+                            if ((time - primaryDownTime) < 280 && moved < 32.0f)
+                                com.radiant.daw.NativeBridge.cancelQuickTouch();
+                            handleMouseUp (host, activePrimaryPointerId, curX, curY, time);
+                            activePrimaryPointerId = -1;
+                        }
+                    }
+                    resetTwoFingerAnchor (event);
                 }
                 return true;
             }

@@ -41,4 +41,9 @@ public final class NativeBridge {
     public static native String getAndroidProjectName();
     public static native double getAndroidSongBpm();
     public static native void markAndroidSaveFailed();
+    public static native void handleTouchWheel(long peerHost, Object peerView, float localX, float localY,
+                                               int viewWidth, int viewHeight, float deltaX, float deltaY, long timeMs);
+    public static native void handleTouchPinch(long peerHost, Object peerView, float localX, float localY,
+                                               int viewWidth, int viewHeight, float scale, boolean vertical, long timeMs);
+    public static native void cancelQuickTouch();
 }

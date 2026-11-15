@@ -3,7 +3,8 @@
 
 #include <memory>
 
-#include "engine/AudioEngine.h"
+#include "core/TouchGestureState.h"
+#include "engine/AudioEngine.h" 
 #include "ui/MainComponent.h"
 #include "ui/Theme.h"
 #include "ui/ThemeSettings.h"
@@ -310,4 +311,74 @@ Java_com_radiant_daw_NativeBridge_getWorkspacePanelState(JNIEnv* env, jclass, ji
     auto result = env->NewIntArray (6);
     env->SetIntArrayRegion (result, 0, 6, data);
     return result;
+}
+
+namespace {
+juce::ComponentPeer* resolvePeer (JNIEnv* env, jobject peerView, jlong peerHost)
+{
+    auto* raw = reinterpret_cast<juce::ComponentPeer*> (peerHost);
+    if (juce::ComponentPeer::isValidPeer (raw))
+        return raw;
+    if (peerView != nullptr)
+    {
+        for (int i = 0; i < juce::ComponentPeer::getNumPeers(); ++i)
+            if (auto* p = juce::ComponentPeer::getPeer (i))
+                if (p->getNativeHandle() != nullptr && env->IsSameObject (static_cast<jobject> (p->getNativeHandle()), peerView))
+                    return p;
+    }
+    return mainComponent != nullptr ? mainComponent->getPeer() : nullptr;
+}
+
+juce::Point<float> toPeerPoint (const juce::ComponentPeer& peer, jfloat localX, jfloat localY, jint viewWidth, jint viewHeight)
+{
+    const auto b = peer.getBounds();
+    const float sx = viewWidth > 0 ? (float) b.getWidth() / (float) viewWidth : 1.0f;
+    const float sy = viewHeight > 0 ? (float) b.getHeight() / (float) viewHeight : 1.0f;
+    return { localX * sx, localY * sy };
+}
+} // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_radiant_daw_NativeBridge_handleTouchWheel(JNIEnv* env, jclass, jlong peerHost, jobject peerView,
+                                                   jfloat localX, jfloat localY, jint viewWidth, jint viewHeight,
+                                                   jfloat deltaX, jfloat deltaY, jlong timeMs)
+{
+    if (auto* peer = resolvePeer (env, peerView, peerHost))
+    {
+        const auto b = peer->getBounds();
+        const float sx = viewWidth > 0 ? (float) b.getWidth() / (float) viewWidth : 1.0f;
+        const float sy = viewHeight > 0 ? (float) b.getHeight() / (float) viewHeight : 1.0f;
+        juce::MouseWheelDetails wheel;
+        wheel.deltaX = (deltaX * sx) / 320.0f;
+        wheel.deltaY = (deltaY * sy) / 320.0f;
+        wheel.isReversed = false;
+        wheel.isSmooth = true;
+        wheel.isInertial = false;
+        peer->handleMouseWheel (juce::MouseInputSource::InputSourceType::touch,
+                                toPeerPoint (*peer, localX, localY, viewWidth, viewHeight),
+                                (juce::int64) timeMs,
+                                wheel);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_radiant_daw_NativeBridge_handleTouchPinch(JNIEnv* env, jclass, jlong peerHost, jobject peerView,
+                                                   jfloat localX, jfloat localY, jint viewWidth, jint viewHeight,
+                                                   jfloat scale, jboolean vertical, jlong timeMs)
+{
+    if (auto* peer = resolvePeer (env, peerView, peerHost))
+    {
+        const lynx::touchgestures::ScopedVerticalPinch scopedVertical (vertical == JNI_TRUE);
+        peer->handleMagnifyGesture (juce::MouseInputSource::InputSourceType::touch,
+                                    toPeerPoint (*peer, localX, localY, viewWidth, viewHeight),
+                                    (juce::int64) timeMs,
+                                    scale);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_radiant_daw_NativeBridge_cancelQuickTouch(JNIEnv*, jclass)
+{
+    if (mainComponent != nullptr)
+        mainComponent->cancelAndroidQuickTouch();
 }

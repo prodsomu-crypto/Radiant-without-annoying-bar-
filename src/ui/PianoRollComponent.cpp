@@ -26,7 +26,8 @@
 #include "ui/EventEditor.h"
 #include "ui/HintBar.h"
 #include "ui/I18n.h"
-#include "ui/Theme.h"
+#include "core/TouchGestureState.h"
+#include "ui/Theme.h" 
 
 namespace lynx
 {
@@ -232,12 +233,12 @@ PianoRollComponent::PianoRollComponent (AudioEngine& e)
     playButton.onClick = [this] { if (onPlayPause) onPlayPause(); };
     playButton.onRightClick = [this] { if (onPlayRightClick) onPlayRightClick(); };
 
-    copyButton.setFlat (true);
+    copyButton.setFlat (false);
     copyButton.setTooltip (tr ("Copy selected notes (or all notes if none selected)  [Ctrl+C]"));
     ui::setQuickTip (copyButton, tr ("Copy"), "Ctrl+C");
     copyButton.onClick = [this] { copySelection(); };
 
-    pasteButton.setFlat (true);
+    pasteButton.setFlat (false);
     pasteButton.setTooltip (tr ("Paste copied notes  [Ctrl+V]"));
     ui::setQuickTip (pasteButton, tr ("Paste"), "Ctrl+V");
     pasteButton.onClick = [this] { paste(); };
@@ -504,12 +505,15 @@ void PianoRollComponent::resized()
         bar.removeFromLeft (juce::jmin (6, bar.getWidth()));
     };
 
+    const auto compactBar = bar.getWidth() < 680;
+    copyButton.setText (compactBar ? juce::String() : tr ("Copy"));
+    pasteButton.setText (compactBar ? juce::String() : tr ("Paste"));
     place (playButton, h);
-    place (channelBox, 150);
+    place (copyButton, compactBar ? h : copyButton.getIdealWidth (h));
+    place (pasteButton, compactBar ? h : pasteButton.getIdealWidth (h));
+    place (channelBox, compactBar ? 104 : 150);
     place (tools, tools.getIdealWidth (h));
-    place (copyButton, copyButton.getIdealWidth (h));
-    place (pasteButton, pasteButton.getIdealWidth (h));
-    place (snapBox, 128);
+    place (snapBox, compactBar ? 92 : 128);
     place (ghostButton, h);
     place (followButton, h);
     place (slideButton, h, true);
@@ -1475,6 +1479,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
 
     downMods = e.mods;
     startedOnEmpty = erasedSomething = holdExpired = false;
+    touchCreatedNote = false;
 
     const auto onKeyboard = e.x < keyboardWidth && e.y >= headerHeight && e.y < gridArea().getBottom();
     hover = {};
@@ -1845,6 +1850,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     // new note (or the chosen chord, with the clicked note as the root)
     setSelection ({});
     createdAt = juce::Time::getMillisecondCounter();
+    touchCreatedNote = e.source.isTouch();
 
     // Brush and Drum Brush tools replaced by Copy/Paste toolbar actions; fall through to standard note placement
     juce::ignoreUnused (tool);
@@ -3655,16 +3661,37 @@ void PianoRollComponent::glideFrame()
     repaint();
 }
 
+void PianoRollComponent::cancelQuickTouch()
+{
+    previewNotes.releaseAll();
+    listenNotes.releaseAll();
+    drag = Drag::none;
+    dragNote = -1;
+    dragIndices.clear();
+    dragOriginals.clear();
+    rubberBand = {};
+    hover = {};
+    if (touchCreatedNote && (juce::Time::getMillisecondCounter() - createdAt) < 300)
+    {
+        touchCreatedNote = false;
+        if (engine.canUndo())
+            engine.undo();
+    }
+    repaint();
+}
+
 void PianoRollComponent::mouseMagnify (const juce::MouseEvent& e, float scale)
 {
     gliding = false;
     const auto factor = gesture::pinchZoomFactor (scale);
-    if (e.mods.isAltDown()) // taller / shorter keys, keeping the key under the pointer in place
+    if (e.mods.isAltDown() || touchgestures::isVerticalPinch()) // taller / shorter keys, keeping the key under the pointer in place
     {
         const auto key = yToKey (e.y);
         const auto offset = e.y - keyToY (key);
-        const auto height = juce::jlimit (gesture::minKeyHeight, gesture::maxKeyHeight, juce::roundToInt (rowHeight * factor));
-        rowHeight = height != rowHeight ? height : juce::jlimit (gesture::minKeyHeight, gesture::maxKeyHeight, rowHeight + (factor > 1.0 ? 1 : factor < 1.0 ? -1 : 0));
+        if (std::abs (rowHeightFloat - (double) rowHeight) > 1.5)
+            rowHeightFloat = (double) rowHeight;
+        rowHeightFloat = juce::jlimit ((double) gesture::minKeyHeight, (double) gesture::maxKeyHeight, rowHeightFloat * factor);
+        rowHeight = juce::jlimit (gesture::minKeyHeight, gesture::maxKeyHeight, juce::roundToInt (rowHeightFloat));
         scrollY = juce::jmax (0, rowFor (key) * rowHeight + offset - (e.y - headerHeight));
     }
     else
@@ -3770,12 +3797,19 @@ void PianoRollComponent::deleteSelection()
 void PianoRollComponent::copySelection()
 {
     clipboard = noteedit::copy (currentPattern (engine.getSong()), selectionOrAll());
+    if (clipboard.empty())
+        ui::postHint ({ tr ("No notes to copy") }, 1500);
+    else
+        ui::postHint ({ tr ("Copied {0} notes", { juce::String ((int) clipboard.size()) }) }, 1600);
 }
 
 void PianoRollComponent::paste()
 {
     if (clipboard.empty())
+    {
+        ui::postHint ({ tr ("Copy notes first") }, 1500);
         return;
+    }
 
     // as in FL: pastes at the same position, already selected for dragging
     std::vector<int> added;
@@ -3786,6 +3820,7 @@ void PianoRollComponent::paste()
     });
     setSelection (added);
     sortNotes();
+    ui::postHint ({ tr ("Pasted {0} notes — drag to move", { juce::String ((int) added.size()) }) }, 1800);
 }
 
 void PianoRollComponent::duplicateSelection()

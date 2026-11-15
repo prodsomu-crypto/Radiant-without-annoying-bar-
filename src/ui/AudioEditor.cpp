@@ -941,6 +941,14 @@ public:
         repaint();
     }
 
+    void mouseMagnify (const juce::MouseEvent& e, float scale) override
+    {
+        if (doc.audio.empty())
+            return;
+        const auto factor = juce::jlimit (0.5f, 2.0f, scale);
+        zoomAround ((float) e.x, 1.0 / (double) factor);
+    }
+
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
         if (doc.audio.empty())

@@ -68,6 +68,11 @@ public:
     juce::String getAndroidProjectName() const { return projectName; }
     double getAndroidSongBpm() const noexcept { return engine.getSong().bpm; }
     void markAndroidSaveFailed() { engine.markModified(); }
+    void cancelAndroidQuickTouch()
+    {
+        pianoRoll.cancelQuickTouch();
+        playlist.cancelQuickTouch();
+    }
     void showSetupWizard(); // first run, or Options > Setup wizard (an overlay over this component)
     void closeSetupWizardForSnapshot() { setupOverlay.reset(); }
     void refreshTweakReadoutForSnapshot() { refreshTweakReadout(); resized(); }

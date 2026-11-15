@@ -60,6 +60,7 @@ public:
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     // trackpad pinch (macOS; Windows touch screens): time zoom around the pointer, with Alt the vertical zoom (round 170e)
     void mouseMagnify (const juce::MouseEvent& e, float scale) override;
+    void cancelQuickTouch();
 
     // Editing shortcuts; the main window forwards keys when the Piano Roll is visible.
     bool handleKey (const juce::KeyPress& key);
@@ -247,8 +248,8 @@ private:
     int titleInsetLeft = 0, titleInsetRight = 0; // the window's title and buttons share the toolbar row
     ChannelBox channelBox;
     SnapBox snapBox { true };         // "Main" (the toolbar snap) or this editor's own grid
-    IconButton copyButton { "copy", Icon::none, "Copy" };
-    IconButton pasteButton { "paste", Icon::none, "Paste" };
+    IconButton copyButton { "copy", Icon::copy, "Copy" };
+    IconButton pasteButton { "paste", Icon::paste, "Paste" };
     IconButton ghostButton { "ghosts", Icon::ghost };
     IconButton scaleSnapButton { "scaleSnap", Icon::scaleSnap }; // snap to the scale (next to the scale box)
     IconButton moreButton { "more", Icon::more }; // note operations, left-edge resize, MIDI import/export
@@ -382,6 +383,8 @@ private:
     int lastDrumKey = -1;
     bool resizeFromLeft = true;       // the left edge of a note resizes it (Ctrl+Alt+Home turns it off)
     bool startedOnEmpty = false, erasedSomething = false, holdExpired = false;
+    bool touchCreatedNote = false;
+    double rowHeightFloat = 14.0;
     juce::uint32 createdAt = 0;       // when the last click created a note (a double click there is not an edit)
     std::int64_t nextPaintTick = 0, paintLength = 0;
     bool muteTarget = false;
