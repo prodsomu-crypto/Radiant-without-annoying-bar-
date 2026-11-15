@@ -356,8 +356,7 @@ public:
 
         grabKeyboardFocus();
         
-        // Handle 2-finger touch panning start
-        if (e.mods.isPopupMenu() || e.getNumberOfTouches() >= 2)
+        if (e.mods.isMiddleButtonDown())
         {
             lastPanDragPos = e.getPosition();
             return;
@@ -388,8 +387,7 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        // Handle 2-finger touch panning drag
-        if (e.getNumberOfTouches() >= 2 || (lastPanDragPos.x != 0 && e.mods.isPopupMenu()))
+        if (lastPanDragPos != juce::Point<int>() && e.mods.isMiddleButtonDown())
         {
             const auto deltaX = e.x - lastPanDragPos.x;
             scroll = juce::jmax (0.0, scroll - (double)deltaX / pixelsPerTick);
