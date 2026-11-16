@@ -5065,7 +5065,7 @@ public:
 
         int width = pages.empty() ? MiscPanel::preferredWidth : pages.front()->getWidth();
         int height = pages.empty() ? MiscPanel::preferredHeight : pages.front()->getHeight();
-        const auto minHdrW = minimumHeaderWidth();
+        const auto minHdrW = 80;
         if (width < minHdrW)
             width = minHdrW;
         refresh();
