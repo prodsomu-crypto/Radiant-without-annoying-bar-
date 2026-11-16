@@ -725,22 +725,80 @@ juce::BorderSize<int> windowFrame (juce::Component* window)
 }
 
 class ScrollingContent final : public juce::Component,
-                               private juce::ComponentListener
+                               private juce::ComponentListener,
+                               private juce::ScrollBar::Listener
 {
+    struct SyncedViewport final : public juce::Viewport
+    {
+        std::function<void()> onAreaChanged;
+        void visibleAreaChanged (const juce::Rectangle<int>&) override
+        {
+            if (onAreaChanged) onAreaChanged();
+        }
+    };
+
+    struct ScrollStepButton final : public juce::TextButton, private juce::Timer
+    {
+        std::function<void()> onStep;
+        explicit ScrollStepButton (const juce::String& txt) : juce::TextButton (txt)
+        {
+            setWantsKeyboardFocus (false);
+            setMouseClickGrabsKeyboardFocus (false);
+            setColour (juce::TextButton::buttonColourId, theme::colour::bg1);
+            setColour (juce::TextButton::textColourOffId, theme::colour::textPrimary);
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            juce::TextButton::mouseDown (e);
+            if (onStep) onStep();
+            startTimer (220);
+        }
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            stopTimer();
+            juce::TextButton::mouseUp (e);
+        }
+        void timerCallback() override
+        {
+            if (isMouseButtonDown() && onStep)
+            {
+                startTimer (45);
+                onStep();
+            }
+            else
+                stopTimer();
+        }
+    };
+
 public:
     explicit ScrollingContent (std::unique_ptr<juce::Component> c) : content (c.release())
     {
-        setName (content->getName());
         if (content != nullptr)
         {
-            naturalWidth = content->getWidth();
-            naturalHeight = content->getHeight();
-        }
-        viewport.setViewedComponent (content, true); // (the viewport deletes it)
-        viewport.setScrollBarThickness (12);
-        addAndMakeVisible (viewport);
-        if (content != nullptr)
+            setName (content->getName());
+            naturalWidth = juce::jmax (1, content->getWidth());
+            naturalHeight = juce::jmax (1, content->getHeight());
             content->addComponentListener (this);
+        }
+        viewport.setViewedComponent (content, true);
+        viewport.setScrollBarsShown (false, false);
+        viewport.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::never);
+        viewport.onAreaChanged = [this] { syncBars(); };
+        addAndMakeVisible (viewport);
+
+        for (auto* b : { &vBar, &hBar })
+        {
+            b->setAutoHide (false);
+            b->addListener (this);
+            addChildComponent (*b);
+        }
+        btnUp.onStep = [this] { stepScroll (0, -56); };
+        btnDown.onStep = [this] { stepScroll (0, 56); };
+        btnLeft.onStep = [this] { stepScroll (-56, 0); };
+        btnRight.onStep = [this] { stepScroll (56, 0); };
+        for (auto* btn : { &btnUp, &btnDown, &btnLeft, &btnRight })
+            addChildComponent (*btn);
+
         fit();
     }
 
@@ -752,18 +810,53 @@ public:
 
     void resized() override
     {
-        viewport.setBounds (getLocalBounds());
-        if (! inFit && content != nullptr && getWidth() > 0 && getHeight() > 0)
+        constexpr int barSize = 18;
+        constexpr int btnLen = 22;
+        const int w = getWidth(), h = getHeight();
+        bool needV = h < naturalHeight;
+        bool needH = w < naturalWidth;
+        if (needV && (w - barSize) < naturalWidth) needH = true;
+        if (needH && (h - barSize) < naturalHeight) needV = true;
+
+        const int bw = needV ? barSize : 0;
+        const int bh = needH ? barSize : 0;
+        const auto viewRect = getLocalBounds().withTrimmedRight (bw).withTrimmedBottom (bh);
+        viewport.setBounds (viewRect);
+
+        if (! inFit && content != nullptr && viewRect.getWidth() > 0 && viewRect.getHeight() > 0)
         {
             ignoreContentResize = true;
-            const auto targetW = viewport.isHorizontalScrollBarShown() ? juce::jmax (naturalWidth, getWidth()) : getWidth();
-            const auto targetH = viewport.isVerticalScrollBarShown() ? juce::jmax (naturalHeight, getHeight()) : getHeight();
-            content->setSize (targetW, targetH);
+            content->setSize (juce::jmax (naturalWidth, viewRect.getWidth()),
+                              juce::jmax (naturalHeight, viewRect.getHeight()));
             ignoreContentResize = false;
         }
+
+        vBar.setVisible (needV);
+        btnUp.setVisible (needV);
+        btnDown.setVisible (needV);
+        if (needV)
+        {
+            auto strip = juce::Rectangle<int> (w - barSize, 0, barSize, juce::jmax (0, h - bh));
+            const int bH = juce::jmin (btnLen, strip.getHeight() / 3);
+            btnUp.setBounds (strip.removeFromTop (bH));
+            btnDown.setBounds (strip.removeFromBottom (bH));
+            vBar.setBounds (strip);
+        }
+
+        hBar.setVisible (needH);
+        btnLeft.setVisible (needH);
+        btnRight.setVisible (needH);
+        if (needH)
+        {
+            auto strip = juce::Rectangle<int> (0, h - barSize, juce::jmax (0, w - bw), barSize);
+            const int bW = juce::jmin (btnLen, strip.getWidth() / 3);
+            btnLeft.setBounds (strip.removeFromLeft (bW));
+            btnRight.setBounds (strip.removeFromRight (bW));
+            hBar.setBounds (strip);
+        }
+        syncBars();
     }
 
-    // on the screen: fitted again with the window's real frame, and the window placed so it is all on the screen
     void parentHierarchyChanged() override
     {
         juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<ScrollingContent> (this)] {
@@ -783,45 +876,67 @@ public:
         const auto baseW = naturalWidth > 0 ? naturalWidth : content->getWidth();
         const auto baseH = naturalHeight > 0 ? naturalHeight : content->getHeight();
         const auto f = windowfit::scrollFit (baseW, baseH, area.getWidth(), area.getHeight(), frame.getLeftAndRight(),
-                                             frame.getTopAndBottom(), viewport.getScrollBarThickness());
-        viewport.setScrollBarsShown (f.scrollsV, f.scrollsH);
+                                             frame.getTopAndBottom(), 18);
         setSize (f.w, f.h);
         if (window != nullptr && window->isOnDesktop())
             fitWindowOnScreen (*window);
         inFit = false;
+        resized();
     }
 
 private:
+    void stepScroll (int dx, int dy)
+    {
+        viewport.setViewPosition (viewport.getViewPositionX() + dx, viewport.getViewPositionY() + dy);
+    }
+
+    void syncBars()
+    {
+        if (syncingBars || content == nullptr)
+            return;
+        syncingBars = true;
+        vBar.setRangeLimits (0.0, (double) content->getHeight(), juce::dontSendNotification);
+        vBar.setCurrentRange ((double) viewport.getViewPositionY(), (double) juce::jmax (1, viewport.getViewHeight()), juce::dontSendNotification);
+        hBar.setRangeLimits (0.0, (double) content->getWidth(), juce::dontSendNotification);
+        hBar.setCurrentRange ((double) viewport.getViewPositionX(), (double) juce::jmax (1, viewport.getViewWidth()), juce::dontSendNotification);
+        syncingBars = false;
+    }
+
+    void scrollBarMoved (juce::ScrollBar* bar, double newStart) override
+    {
+        if (syncingBars)
+            return;
+        if (bar == &vBar)
+            viewport.setViewPosition (viewport.getViewPositionX(), juce::roundToInt (newStart));
+        else if (bar == &hBar)
+            viewport.setViewPosition (juce::roundToInt (newStart), viewport.getViewPositionY());
+    }
+
     void componentMovedOrResized (juce::Component&, bool, bool wasResized) override
     {
-        if (wasResized && ! ignoreContentResize)
+        if (wasResized && ! ignoreContentResize && content != nullptr && ! inFit)
         {
-            if (content != nullptr && ! inFit)
-            {
-                naturalWidth = content->getWidth();
-                naturalHeight = content->getHeight();
-            }
-            fit(); // (the window follows its content's size)
+            naturalWidth = juce::jmax (1, content->getWidth());
+            naturalHeight = juce::jmax (1, content->getHeight());
+            fit();
         }
     }
 
     juce::Component::SafePointer<juce::Component> content;
-    juce::Viewport viewport;
-    int naturalWidth = 0, naturalHeight = 0;
-    bool inFit = false;
-    bool ignoreContentResize = false;
+    SyncedViewport viewport;
+    juce::ScrollBar vBar { true }, hBar { false };
+    ScrollStepButton btnUp { juce::String::fromUTF8 ("\xe2\x96\xb2") },
+                     btnDown { juce::String::fromUTF8 ("\xe2\x96\xbc") },
+                     btnLeft { juce::String::fromUTF8 ("\xe2\x97\x80") },
+                     btnRight { juce::String::fromUTF8 ("\xe2\x96\xb6") };
+    int naturalWidth = 1, naturalHeight = 1;
+    bool inFit = false, ignoreContentResize = false, syncingBars = false;
 };
 } // namespace
 
 std::unique_ptr<juce::Component> fitContentToScreen (std::unique_ptr<juce::Component> content)
 {
     if (content == nullptr)
-        return content;
-    const auto area = usableScreen();
-    const auto frame = windowFrame (nullptr);
-    const auto f = windowfit::scrollFit (content->getWidth(), content->getHeight(), area.getWidth(), area.getHeight(), frame.getLeftAndRight(),
-                                         frame.getTopAndBottom(), 12);
-    if (! f.scrolls())
         return content;
     return std::make_unique<ScrollingContent> (std::move (content));
 }

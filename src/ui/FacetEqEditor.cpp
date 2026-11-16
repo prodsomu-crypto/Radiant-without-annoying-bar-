@@ -1884,17 +1884,14 @@ public:
           gone (engine, track, slot, [this] { closeButtonPressed(); })
     {
         configureSecondaryWindowControls (*this);
-        setContentOwned (new FacetEqEditor (engine, track, slot, false), true);
+        auto* editor = new FacetEqEditor (engine, track, slot, false);
+        setContentOwned (fitContentToScreen (std::unique_ptr<juce::Component> (editor)).release(), true);
         setResizable (true, false);
-        if (auto* c = getConstrainer())
-        {
-            c->setMinimumSize (860, 440);
-            c->setMaximumSize (2400, 1400);
-        }
+        setResizeLimits (260, 160, 2400, 1400);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);
-        if (auto* c = getContentComponent()) skin::playOpenAnimation (*c, skin::styleFor (EffectKind::facetEq)); // round 126: fade / scale in
+        skin::playOpenAnimation (*editor, skin::styleFor (EffectKind::facetEq)); // round 126: fade / scale in
     }
 
     void closeButtonPressed() override;

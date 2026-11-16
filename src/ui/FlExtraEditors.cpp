@@ -1277,8 +1277,9 @@ public:
         : DocumentWindow (title, theme::colour::bg2, DocumentWindow::closeButton)
     {
         configureSecondaryWindowControls (*this);
-        setContentOwned (makeFlExtraEditor (target, kind, false).release(), true);
+        setContentOwned (fitContentToScreen (makeFlExtraEditor (target, kind, false)).release(), true);
         setResizable (true, false);
+        setResizeLimits (240, 140, 4096, 4096);
         if (kind == EffectKind::bigClock)
             setResizeLimits (200, 80, 3000, 1200);
         else if (kind == EffectKind::tuner)

@@ -631,9 +631,9 @@ public:
         : juce::DocumentWindow (title, theme::colour::bg1, DocumentWindow::closeButton)
     {
         configureSecondaryWindowControls (*this);
-        setContentOwned (new AutomationEditor (engine, index), true);
+        setContentOwned (fitContentToScreen (std::make_unique<AutomationEditor> (engine, index)).release(), true);
         setResizable (true, false);
-        setResizeLimits (400, 200, 4000, 2000);
+        setResizeLimits (240, 140, 4000, 2000);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);

@@ -3779,14 +3779,9 @@ public:
         content = editor.get();
         auto holder = std::make_unique<ScaledHolder> (std::move (editor));
         const auto w = holder->baseW, h = holder->baseH;
-        setContentOwned (holder.release(), true);
+        setContentOwned (fitContentToScreen (std::move (holder)).release(), true);
         setResizable (true, false);
-        if (auto* c = getConstrainer())
-        {
-            c->setFixedAspectRatio ((double) w / (double) h);
-            c->setMinimumSize (juce::roundToInt (w * 0.7), juce::roundToInt (h * 0.7));
-            c->setMaximumSize (w * 2, h * 2);
-        }
+        setResizeLimits (260, 160, w * 2, h * 2);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);

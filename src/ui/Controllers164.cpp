@@ -935,8 +935,9 @@ public:
           gone (engine, track, slot, [this] { closeButtonPressed(); })
     {
         configureSecondaryWindowControls (*this);
-        setContentOwned (content.release(), true);
+        setContentOwned (fitContentToScreen (std::move (content)).release(), true);
         setResizable (true, false);
+        setResizeLimits (240, 140, 4096, 4096);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);

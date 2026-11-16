@@ -515,11 +515,12 @@ public:
         const auto resizable = editor->isResizable();
         shownEditor = editor;
         thumbKey = plugin.getPluginDescription().createIdentifierString().toStdString();
-        if (context.engine != nullptr && context.find) // FL's wrapper header and settings page (round 146a)
-            setContentOwned (new WrappedEditor (editor, *context.engine, std::move (context.find), plugin, context.channel), true);
-        else
-            setContentOwned (editor, true);
-        setResizable (resizable, false);
+        std::unique_ptr<juce::Component> root = (context.engine != nullptr && context.find)
+            ? std::unique_ptr<juce::Component> (new WrappedEditor (editor, *context.engine, std::move (context.find), plugin, context.channel))
+            : std::unique_ptr<juce::Component> (editor);
+        setContentOwned (fitContentToScreen (std::move (root)).release(), true);
+        setResizable (true, false);
+        setResizeLimits (260, 160, 4096, 4096);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);

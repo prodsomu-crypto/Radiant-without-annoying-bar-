@@ -5290,14 +5290,9 @@ public:
         configureSecondaryWindowControls (*this);
         auto* editor = new NativeEffectEditor (engine, track, slot, 1.25f, 0);
         const auto design = editor->designSize();
-        setContentOwned (editor, true);
+        setContentOwned (fitContentToScreen (std::unique_ptr<juce::Component> (editor)).release(), true);
         setResizable (true, false);
-        // keep FL's proportions while resizing (the presets bar has a fixed height)
-        if (auto* c = getConstrainer())
-        {
-            c->setMinimumSize (juce::jmax (design.x / 2, editor->minimumWidth()), design.y / 2); // round 170k2: the name fits
-            c->setMaximumSize (design.x * 3, design.y * 3 + 200);
-        }
+        setResizeLimits (260, 160, juce::jmax (1600, design.x * 3), juce::jmax (1200, design.y * 3 + 200));
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);

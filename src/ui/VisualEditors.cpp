@@ -3177,9 +3177,9 @@ public:
         : DocumentWindow (title, theme::colour::bg2, DocumentWindow::closeButton)
     {
         configureSecondaryWindowControls (*this);
-        setContentOwned (makeEditorFor (target, kind, false).release(), true);
+        setContentOwned (fitContentToScreen (makeEditorFor (target, kind, false)).release(), true);
         setResizable (true, false);
-        setResizeLimits (kind == EffectKind::waveCandy ? 300 : 900, kind == EffectKind::waveCandy ? 260 : 620, 4000, 3000);
+        setResizeLimits (260, 160, 4000, 3000);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);

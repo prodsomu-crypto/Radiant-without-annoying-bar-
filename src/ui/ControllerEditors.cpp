@@ -288,8 +288,9 @@ public:
           gone (engine, track, slot, [this] { closeButtonPressed(); })
     {
         configureSecondaryWindowControls (*this);
-        setContentOwned (new FormulaEditor (engine, track, slot), true);
+        setContentOwned (fitContentToScreen (std::make_unique<FormulaEditor> (engine, track, slot)).release(), true);
         setResizable (true, false);
+        setResizeLimits (240, 140, 4096, 4096);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);

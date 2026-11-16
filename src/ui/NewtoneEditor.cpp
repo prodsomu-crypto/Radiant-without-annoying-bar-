@@ -1495,9 +1495,9 @@ public:
           gone (engine, track, slot, [this] { closeButtonPressed(); })
     {
         configureSecondaryWindowControls (*this);
-        setContentOwned (new NewtoneEditor (engine, track, slot), true);
+        setContentOwned (fitContentToScreen (std::make_unique<NewtoneEditor> (engine, track, slot)).release(), true);
         setResizable (true, false);
-        setResizeLimits (760, 420, 4000, 2000);
+        setResizeLimits (260, 160, 4000, 2000);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         keepAboveMainWindow (*this);
