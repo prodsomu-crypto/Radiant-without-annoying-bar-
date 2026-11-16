@@ -521,6 +521,10 @@ MainComponent::MainComponent (AudioEngine& e, bool restoreUserSettings)
     recent.restoreFromString (PluginHost::settingsFolder().getChildFile ("recentes.txt").loadFileAsString());
     addAndMakeVisible (menuBar);
     rackButton.setFlat (false);
+    rackButton.setText ("Rack");
+    rackButton.setIcon (Icon::none);
+    rackButton.setOnColour (theme::colour::accent);
+    rackButton.setIconColourWhenOn (theme::colour::onAccent);
     rackButton.setClickingTogglesState (true);
     rackButton.setWantsKeyboardFocus (false);
     rackButton.setMouseClickGrabsKeyboardFocus (false);
@@ -1042,7 +1046,7 @@ void MainComponent::resized()
         ur.removeFromLeft (2);
         put (redoButton, ur.removeFromLeft (h));
         ur.removeFromLeft (4);
-        put (rackButton, ur.removeFromLeft (juce::jmin (56, juce::jmax (h, ur.getWidth() / 3))));
+        put (rackButton, ur.removeFromLeft (52));
         titleArea = {};
         placeHintBar (ur.withTrimmedLeft (8).withWidth (juce::jmin (900, juce::jmax (0, ur.getWidth() - 8))).reduced (0, 1));
         fixedToolbarArea = bar;
@@ -1058,7 +1062,7 @@ void MainComponent::resized()
         row1Rect.removeFromLeft (2);
         put (redoButton, row1Rect.removeFromLeft (h));
         row1Rect.removeFromLeft (4);
-        put (rackButton, row1Rect.removeFromLeft (juce::jmin (56, juce::jmax (h, row1Rect.getWidth() / 3))));
+        put (rackButton, row1Rect.removeFromLeft (52));
         titleArea = row1Rect.withTrimmedLeft (8).withTrimmedRight (4);
         if (titleArea.getWidth() < 60)
             titleArea = {};
@@ -1204,10 +1208,16 @@ void MainComponent::resized()
     auto below = getLocalBounds().withTrimmedTop (toolbarHeight + tray);
     if (updateBar.isVisible())
         updateBar.setBounds (below.removeFromTop (updater::UpdateBar::height));
-    if (deviceRackOpen && deviceRack.isVisible())
+    if (deviceRackOpen)
     {
+        deviceRack.setVisible (true);
         const int rh = juce::jlimit (140, juce::jmax (140, below.getHeight() - 80), deviceRackHeight);
         deviceRack.setBounds (below.removeFromBottom (rh));
+        deviceRack.toFront (false);
+    }
+    else
+    {
+        deviceRack.setVisible (false);
     }
     workspace.setBounds (below);
     if (danceStage != nullptr)

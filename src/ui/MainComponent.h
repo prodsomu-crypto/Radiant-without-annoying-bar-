@@ -526,7 +526,7 @@ private:
                                                                  IconButton { "browserPanel", Icon::browser },
                                                                  IconButton { "touchKeyboardPanel", Icon::keyboard } };
     IconButton pluginPickerButton { "pluginPicker", Icon::pluginPicker };
-    IconButton rackButton { "deviceRack", Icon::settings, "Rack" };
+    IconButton rackButton { "deviceRack", Icon::none, "Rack" };
     DeviceRackComponent deviceRack { engine };
     bool deviceRackOpen = false;
     int deviceRackHeight = 210;
