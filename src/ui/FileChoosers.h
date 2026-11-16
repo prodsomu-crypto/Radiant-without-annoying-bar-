@@ -195,6 +195,126 @@ inline void readDocumentAsync (juce::URL url, std::function<void (ReadDocumentRe
         callback ({ {}, {}, "Could not start the document reader" });
 }
 
+struct ImportDocumentResult
+{
+    juce::File file;
+    juce::String name;
+    juce::String error;
+};
+
+// Copies an Android SAF content:// URL (or returns an existing local file) into a persistent local file in
+// `destFolder` off the message thread, preserving extension and streaming in chunks.
+inline void importDocumentToFileAsync (juce::URL url, juce::File destFolder, juce::String fallbackName,
+                                       std::function<void (ImportDocumentResult)> callback)
+{
+    auto job = [url = std::move (url), destFolder = std::move (destFolder), fallbackName = std::move (fallbackName), callback] () mutable {
+        ImportDocumentResult result;
+        if (url.isLocalFile())
+        {
+            result.file = url.getLocalFile();
+            result.name = result.file.getFileName();
+            if (! result.file.existsAsFile())
+                result.error = "Selected file does not exist";
+        }
+        else
+        {
+            std::unique_ptr<juce::InputStream> input;
+           #if JUCE_ANDROID
+            auto document = juce::AndroidDocument::fromDocument (url);
+            if (document)
+            {
+                result.name = document.getInfo().getName();
+                input = document.createInputStream();
+            }
+           #endif
+            if (input == nullptr)
+                input = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress));
+
+            if (input == nullptr)
+            {
+                result.error = "Could not open the selected document";
+            }
+            else
+            {
+                if (result.name.isEmpty())
+                    result.name = url.getFileName();
+                if (result.name.isEmpty())
+                    result.name = fallbackName;
+
+                destFolder.createDirectory();
+                auto legal = juce::File::createLegalFileName (result.name);
+                if (legal.isEmpty())
+                    legal = fallbackName;
+                const auto hash = juce::String::toHexString ((juce::int64) url.toString (false).hashCode64()).substring (0, 8);
+                const auto stem = juce::File (legal).getFileNameWithoutExtension();
+                auto ext = juce::File (legal).getFileExtension();
+                if (ext.isEmpty() && fallbackName.containsChar ('.'))
+                    ext = juce::File (fallbackName).getFileExtension();
+                auto target = destFolder.getChildFile ((stem.isEmpty() ? juce::String ("imported") : stem) + "-" + hash + ext);
+
+                auto temp = target.getSiblingFile (target.getFileName() + ".tmp");
+                temp.deleteFile();
+                {
+                    juce::FileOutputStream out (temp);
+                    if (out.failedToOpen())
+                    {
+                        result.error = "Could not create local cache file";
+                    }
+                    else
+                    {
+                        std::array<char, 64 * 1024> buffer {};
+                        std::uint64_t total = 0;
+                        constexpr std::uint64_t maxBytes = 2ull * 1024ull * 1024ull * 1024ull;
+                        while (result.error.isEmpty())
+                        {
+                            const auto n = input->read (buffer.data(), (int) buffer.size());
+                            if (n < 0)
+                            {
+                                result.error = "Failed reading the selected document";
+                                break;
+                            }
+                            if (n == 0)
+                                break;
+                            total += (std::uint64_t) n;
+                            if (total > maxBytes)
+                            {
+                                result.error = "The selected file is too large";
+                                break;
+                            }
+                            if (! out.write (buffer.data(), (size_t) n))
+                            {
+                                result.error = "Failed writing local cache file";
+                                break;
+                            }
+                        }
+                        out.flush();
+                        if (result.error.isEmpty() && total == 0)
+                            result.error = "The selected document is empty or could not be read";
+                    }
+                }
+                if (result.error.isEmpty())
+                {
+                    target.deleteFile();
+                    if (temp.moveFileTo (target))
+                        result.file = target;
+                    else
+                        result.error = "Could not save local copy of document";
+                }
+                if (result.error.isNotEmpty())
+                    temp.deleteFile();
+            }
+        }
+
+        juce::MessageManager::callAsync ([callback = std::move (callback), result = std::move (result)] () mutable {
+            if (callback)
+                callback (std::move (result));
+        });
+    };
+
+    if (! juce::Thread::launch (std::move (job)) && callback)
+        callback ({ {}, {}, "Could not start the document importer" });
+}
+
 // A juce::FileChooser: the system's dialog where it works, else JUCE's built-in one (see above)
 inline std::unique_ptr<juce::FileChooser> makeFileChooser (const juce::String& title, const juce::File& start = {},
                                                            const juce::String& filters = {})

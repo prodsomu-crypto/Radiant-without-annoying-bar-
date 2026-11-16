@@ -50,6 +50,7 @@
 #include "core/SytrusEngine.h"
 #include "core/SynthPresets.h"
 #include "core/PluginLayout.h"
+#include "engine/PluginHost.h"
 #include "engine/SampleLibrary.h"
 #include "engine/Text.h"
 #include "core/RackOps.h"
@@ -1106,22 +1107,41 @@ public:
         const auto rows = ((int) knobs.size() + 6) / 7; // the grid of resized()
         setSize (720, std::max (dx10 || threeOsc ? 500 : 384, 46 + rows * 110 + 8 + (granulizerModes ? 64 : 0)));
 
-        // a Granulizer node inside a Patcher (round 165c): no channel to drop a sample on, so its own Sample button
-        if (granulizer && ref.index < 0)
+        // Sample picker for Fruity Granulizer (both Channel Rack channels and Patcher nodes)
+        if (granulizer)
         {
-            sampleButton.setButtonText (tr ("Sample..."));
+            sampleButton.setButtonText (tr ("Load sample..."));
             const auto path = juce::String::fromUTF8 (def.samplePath.c_str());
             ui::setHint (sampleButton, path.isEmpty() ? tr ("Choose the sample the Granulizer plays") : path);
             sampleButton.onClick = [this] {
                 juce::StringArray patterns;
                 for (const auto e : sampleFileExtensions)
                     patterns.add ("*." + juce::String (std::string (e)));
-                chooser = lynx::ui::makeFileChooser (tr ("Sample"), juce::File(), patterns.joinIntoString (";"));
+               #if JUCE_ANDROID
+                const juce::String filter = "*";
+               #else
+                const juce::String filter = patterns.joinIntoString (";");
+               #endif
+                chooser = lynx::ui::makeFileChooser (tr ("Load sample"), juce::File(), filter);
                 lynx::ui::launchChooser (chooser, juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                       [safe = juce::Component::SafePointer<ModelPanel> (this)] (const juce::FileChooser& fc) {
-                                          if (safe == nullptr || fc.getResult() == juce::File())
+                                          const auto url = fc.getURLResult();
+                                          if (safe == nullptr || url.toString (false).isEmpty())
                                               return;
-                                          safe->loadGranulizerSample (fc.getResult());
+                                          lynx::ui::importDocumentToFileAsync (
+                                              url, PluginHost::settingsFolder().getChildFile ("imported-samples"), "sample.wav",
+                                              [safe] (lynx::ui::ImportDocumentResult imported) {
+                                                  if (safe == nullptr)
+                                                      return;
+                                                  if (imported.error.isNotEmpty() || ! imported.file.existsAsFile())
+                                                  {
+                                                      juce::AlertWindow::showMessageBoxAsync (
+                                                          juce::MessageBoxIconType::WarningIcon, tr ("Sample"),
+                                                          imported.error.isNotEmpty() ? imported.error : tr ("Could not read the selected sample."));
+                                                      return;
+                                                  }
+                                                  safe->loadGranulizerSample (imported.file);
+                                              });
                                       });
             };
             addAndMakeVisible (sampleButton);
@@ -2214,6 +2234,8 @@ public:
                 artLayer->setStage (artStage());
                 artLayer->toFront (false);
             }
+            if (sampleButton.isVisible())
+                sampleButton.toFront (false);
             return;
         }
         constexpr int columns = 7, w = 96, h = 92;
@@ -2392,7 +2414,7 @@ private:
         {
             g.setColour (colour::textSecondary);
             g.setFont (font (juce::jmax (9.0f, 11.0f * f)));
-            g.drawFittedText (tr ("Drop a sample here (or on the channel button)"), r.toNearestInt(), juce::Justification::centred, 2, 0.7f);
+            g.drawFittedText (tr ("Tap Load sample... above, or drop a sample here"), r.toNearestInt(), juce::Justification::centred, 2, 0.7f);
             return;
         }
         if (path != granulizerPeaksPath)
@@ -4887,6 +4909,26 @@ public:
             addPage (std::move (instrumentPage), tr ("Plugin"), tr ("The instrument's own settings"));
         if (envelopePage != nullptr)
             addPage (std::move (envelopePage), tr ("Envelope / instrument"), tr ("Envelope / instrument settings: the filter and pitch envelopes and the LFOs"));
+
+        toggleHeaderButton.setWantsKeyboardFocus (false);
+        toggleHeaderButton.setMouseClickGrabsKeyboardFocus (false);
+        toggleHeaderButton.onClick = [this] {
+            if (minimized)
+                setMinimized (false);
+            headerVisible = ! headerVisible;
+            const auto contentH = juce::jmax (1, expandedHeight - headerHeight);
+            setSize (expandedWidth, headerVisible ? expandedHeight : contentH);
+            if (auto* window = findParentComponentOfClass<juce::ResizableWindow>())
+                if (auto* content = window->getContentComponent())
+                {
+                    window->setContentComponentSize (content->getWidth(), content->getHeight());
+                    fitWindowOnScreen (*window);
+                }
+            resized();
+            repaint();
+        };
+        addAndMakeVisible (toggleHeaderButton);
+
         if (node)
         {
             int width = 1, height = 1;
@@ -4895,7 +4937,9 @@ public:
                 width = juce::jmax (width, p->getWidth());
                 height = juce::jmax (height, p->getHeight());
             }
-            setSize (width, headerHeight + height);
+            expandedWidth = width;
+            expandedHeight = headerHeight + height;
+            setSize (expandedWidth, expandedHeight);
             showTab (0);
             return;
         }
@@ -5068,14 +5112,50 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (theme::colour::bg2);
-        g.setColour (theme::colour::bg3);
-        g.fillRect (getLocalBounds().removeFromTop (headerHeight));
-        g.setColour (theme::colour::border);
-        g.drawHorizontalLine (headerHeight - 1, 0.0f, (float) getWidth());
+        if (headerVisible || minimized)
+        {
+            g.setColour (theme::colour::bg3);
+            g.fillRect (getLocalBounds().removeFromTop (headerHeight));
+            g.setColour (theme::colour::border);
+            g.drawHorizontalLine (headerHeight - 1, 0.0f, (float) getWidth());
+        }
     }
 
     void resized() override
     {
+        const auto showHeader = headerVisible || minimized;
+        for (auto& t : tabs)
+            t->setVisible (showHeader);
+        if (presetBar != nullptr)
+            presetBar->setVisible (showHeader);
+        on.setVisible (showHeader && ! node);
+        for (auto& k : header)
+            k->setVisible (showHeader);
+       #if JUCE_ANDROID
+        minimiseButton.setVisible (showHeader && ! node);
+        closeButton.setVisible (showHeader && ! node);
+       #endif
+
+        if (! showHeader)
+        {
+            toggleHeaderButton.setVisible (true);
+            toggleHeaderButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xbc"));
+            toggleHeaderButton.setTooltip (tr ("Show channel bar"));
+            toggleHeaderButton.setBounds (getWidth() - 30, 4, 24, 22);
+            toggleHeaderButton.toFront (false);
+            const auto body = getLocalBounds();
+            for (std::size_t i = 0; i < pages.size(); ++i)
+            {
+                const auto w = juce::jmin (body.getWidth(), sizes[i].x), h = juce::jmin (body.getHeight(), sizes[i].y);
+                pages[i]->setBounds (body.getX() + (body.getWidth() - w) / 2, body.getY(), w, h);
+            }
+            return;
+        }
+
+        toggleHeaderButton.setVisible (! minimized);
+        toggleHeaderButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb2"));
+        toggleHeaderButton.setTooltip (tr ("Hide channel bar"));
+
         auto tabsArea = getLocalBounds().removeFromTop (headerHeight).reduced (8, 6);
         if (presetBar != nullptr) // tabs on the upper row, the preset arrows under them
         {
@@ -5089,13 +5169,16 @@ public:
             tabsArea.removeFromLeft (4);
         }
         auto right = getLocalBounds().removeFromTop (headerHeight).reduced (6, 2);
+        toggleHeaderButton.setBounds (right.removeFromRight (24).withSizeKeepingCentre (24, 22));
+        right.removeFromRight (2);
 #if JUCE_ANDROID
-        closeButton.setBounds (right.removeFromRight (48));
-        minimiseButton.setBounds (right.removeFromRight (48));
+        closeButton.setBounds (right.removeFromRight (38));
+        minimiseButton.setBounds (right.removeFromRight (38));
 #endif
         for (auto it = header.rbegin(); it != header.rend(); ++it)
             (*it)->setBounds (right.removeFromRight (48));
-        on.setBounds (right.removeFromRight (52).withSizeKeepingCentre (52, 24));
+        if (! node)
+            on.setBounds (right.removeFromRight (52).withSizeKeepingCentre (52, 24));
         // each page keeps its own size (some scale their drawing with it), centred under the header
         const auto body = getLocalBounds().withTrimmedTop (headerHeight);
         for (std::size_t i = 0; i < pages.size(); ++i)
@@ -5117,7 +5200,7 @@ private:
         for (int i = 0; i < (int) pages.size(); ++i)
             pages[(std::size_t) i]->setVisible (! minimized && i == current);
 
-        setSize (expandedWidth, minimized ? headerHeight : expandedHeight);
+        setSize (expandedWidth, minimized ? headerHeight : (headerVisible ? expandedHeight : juce::jmax (1, expandedHeight - headerHeight)));
         if (auto* window = findParentComponentOfClass<juce::ResizableWindow>())
             if (auto* content = window->getContentComponent())
             {
@@ -5147,6 +5230,8 @@ private:
     juce::ToggleButton on;
     IconButton minimiseButton { "Minimize editor", Icon::minimise }, closeButton { "Close editor", Icon::close };
     std::unique_ptr<ChannelPresetBar> presetBar;
+    juce::TextButton toggleHeaderButton;
+    bool headerVisible = true;
     bool instrumentPageFirst = false;
     bool minimized = false;
     int expandedWidth = 0, expandedHeight = 0;

@@ -641,7 +641,7 @@ void configureSecondaryWindowControls (juce::DocumentWindow& window)
     const auto buttons = juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton
                          | (hasMaximiseButton ? juce::DocumentWindow::maximiseButton : 0);
     window.setTitleBarButtonsRequired (buttons, false);
-    window.setTitleBarHeight (48);
+    window.setTitleBarHeight (26);
 
     if (auto* button = window.getMinimiseButton())
     {

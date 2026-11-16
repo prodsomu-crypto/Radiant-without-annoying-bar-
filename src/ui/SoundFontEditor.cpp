@@ -742,22 +742,41 @@ private:
     void chooseFont()
     {
         const auto start = currentPath().empty() ? juce::File::getSpecialLocation (juce::File::userDocumentsDirectory) : juce::File (u8 (currentPath()));
-        chooser = lynx::ui::makeFileChooser (tr ("Load SoundFont"), start, "*.sf2;*.sf3;*.sfz");
+       #if JUCE_ANDROID
+        const juce::String filter = "*";
+       #else
+        const juce::String filter = "*.sf2;*.sf3;*.sfz";
+       #endif
+        chooser = lynx::ui::makeFileChooser (tr ("Load SoundFont"), start, filter);
         lynx::ui::launchChooser (chooser, juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [safe = juce::Component::SafePointer<SoundFontEditor> (this)] (const juce::FileChooser& fc) {
-                                  if (safe == nullptr || fc.getResult() == juce::File())
+                                  const auto url = fc.getURLResult();
+                                  if (safe == nullptr || url.toString (false).isEmpty())
                                       return;
-                                  const auto path = std8 (fc.getResult().getFullPathName());
-                                  int bank = 0, program = 0;
-                                  if (! firstSoundFontPreset (path, bank, program))
-                                  {
-                                      juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"),
-                                                                              tr ("This file is not a SoundFont Radiant can read."));
-                                      return;
-                                  }
-                                  loadInto (safe->engine, safe->channel, path, bank, program);
-                                  sf::PresetIndex::shared().addFont (path);
-                                  safe->refreshAll();
+                                  lynx::ui::importDocumentToFileAsync (
+                                      url, PluginHost::settingsFolder().getChildFile ("imported-soundfonts"), "soundfont.sf2",
+                                      [safe] (lynx::ui::ImportDocumentResult imported) {
+                                          if (safe == nullptr)
+                                              return;
+                                          if (imported.error.isNotEmpty() || ! imported.file.existsAsFile())
+                                          {
+                                              juce::AlertWindow::showMessageBoxAsync (
+                                                  juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"),
+                                                  imported.error.isNotEmpty() ? imported.error : tr ("Could not read the selected file."));
+                                              return;
+                                          }
+                                          const auto path = std8 (imported.file.getFullPathName());
+                                          int bank = 0, program = 0;
+                                          if (! firstSoundFontPreset (path, bank, program))
+                                          {
+                                              juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"),
+                                                                                      tr ("This file is not a SoundFont Radiant can read."));
+                                              return;
+                                          }
+                                          loadInto (safe->engine, safe->channel, path, bank, program);
+                                          sf::PresetIndex::shared().addFont (path);
+                                          safe->refreshAll();
+                                      });
                               });
     }
 

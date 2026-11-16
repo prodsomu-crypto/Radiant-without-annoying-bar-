@@ -325,15 +325,12 @@ PianoRollComponent::PianoRollComponent (AudioEngine& e)
         addAndMakeVisible (box);
     }
 
-    laneBox.addItem (tr ("Velocity"), 1);
-    laneBox.addItem (tr ("Pan"), 2);
-    laneBox.addItem (tr ("Fine pitch"), 3);
-    laneBox.setTooltip (tr ("What the bottom lane edits"));
-    laneBox.setSelectedId (1, juce::dontSendNotification);
+    laneBox.setTooltip (tr ("What the bottom lane edits (note properties and MIDI CCs)"));
     laneBox.setWantsKeyboardFocus (false);
     laneBox.setMouseClickGrabsKeyboardFocus (false);
     laneBox.onChange = [this] { repaint(); };
     addAndMakeVisible (laneBox);
+    rebuildLaneBox (std::nullopt, true);
 
     setOpaque (true); // paints every pixel: nothing behind it is redrawn while scrolling
 
@@ -527,7 +524,9 @@ void PianoRollComponent::resized()
         scaleSnapButton.setVisible (false);
     place (moreButton, h);
     place (chordLabel, 84, true);
-    laneBox.setBounds (2, velocityArea().getY() + 4, keyboardWidth - 4, 20);
+    const auto maxLaneH = juce::jlimit (minVelocityHeight, maxVelocityHeight, juce::jmax (minVelocityHeight, getHeight() - headerHeight - 80));
+    velocityHeight = juce::jlimit (minVelocityHeight, maxLaneH, velocityHeight);
+    laneBox.setBounds (2, velocityArea().getY() + 6, keyboardWidth - 4, 24);
     overview.setBounds (keyboardWidth, toolbarHeight, getWidth() - keyboardWidth - scrollBarSize, overviewHeight);
     vBar.setBounds (getWidth() - scrollBarSize, headerHeight, scrollBarSize, getHeight() - headerHeight - velocityHeight);
     updateScrollBars();
@@ -1029,8 +1028,13 @@ void PianoRollComponent::paint (juce::Graphics& g)
         juce::Graphics::ScopedSaveState state (g);
         g.reduceClipRegion (lane);
         drawVerticalGrid (lane);
-        g.setColour (border);
+        const auto resizingLane = drag == Drag::laneResize || (drag == Drag::none && lastMouse.x >= 0 && onLaneResizeBorder (lastMouse));
+        g.setColour (resizingLane ? accent : border);
         g.drawHorizontalLine (lane.getY(), (float) lane.getX(), (float) lane.getRight());
+        if (resizingLane)
+            g.drawHorizontalLine (lane.getY() + 1, (float) lane.getX(), (float) lane.getRight());
+        g.setColour (resizingLane ? accent.withAlpha (0.9f) : textSecondary.withAlpha (0.45f));
+        g.fillRoundedRectangle ((float) lane.getCentreX() - 18.0f, (float) lane.getY() + 1.0f, 36.0f, 4.0f, 2.0f);
 
         const auto usable = (float) lane.getHeight() - 8.0f;
         const auto bipolar = laneIsBipolar();
@@ -1239,7 +1243,8 @@ void PianoRollComponent::paint (juce::Graphics& g)
         const auto lane = velocityArea();
         g.setColour (bg2);
         g.fillRect (0, lane.getY(), keyboardWidth, lane.getHeight());
-        juce::ignoreUnused (lane); // the property combo sits here
+        g.setColour (drag == Drag::laneResize ? accent : border);
+        g.drawHorizontalLine (lane.getY(), 0.0f, (float) keyboardWidth);
     }
 
     // top-left corner: channel name
@@ -1358,7 +1363,14 @@ void PianoRollComponent::setLaneValue (Note& n, float v) const
 
 bool PianoRollComponent::laneIsBipolar() const
 {
-    return laneBox.getSelectedId() != 1;
+    const auto id = laneBox.getSelectedId();
+    return id == 2 || id == 3 || id == ccLaneIdBase + 128 || id == ccLaneIdBase + 10 || id == ccLaneIdBase + 8;
+}
+
+bool PianoRollComponent::onLaneResizeBorder (juce::Point<int> p) const noexcept
+{
+    const auto laneTop = velocityArea().getY();
+    return p.x >= 0 && p.x < getWidth() - scrollBarSize && std::abs (p.y - laneTop) <= laneResizeGrip;
 }
 
 void PianoRollComponent::applyVelocity (int fromX, int toX, int y)
@@ -1510,6 +1522,15 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
         panStartTicks = scrollTicks;
         panStartY = scrollY;
         setMouseCursor (editorCursor (gesture::Cursor::pan));
+        return;
+    }
+
+    if (e.mods.isLeftButtonDown() && onLaneResizeBorder (e.getPosition()))
+    {
+        drag = Drag::laneResize;
+        laneResizeStartY = e.y;
+        laneResizeStartHeight = velocityHeight;
+        setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
         return;
     }
 
@@ -2026,6 +2047,19 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
             lastVelocityX = e.x;
             return;
 
+        case Drag::laneResize:
+        {
+            const auto maxLaneH = juce::jlimit (minVelocityHeight, maxVelocityHeight, juce::jmax (minVelocityHeight, getHeight() - headerHeight - 80));
+            const auto nextH = juce::jlimit (minVelocityHeight, maxLaneH, laneResizeStartHeight + (laneResizeStartY - e.y));
+            if (nextH != velocityHeight)
+            {
+                velocityHeight = nextH;
+                resized();
+                repaint();
+            }
+            return;
+        }
+
         case Drag::eventDraw:
         case Drag::eventErase:
             drawEvents (lastVelocityX, e.x, e.y, drag == Drag::eventErase);
@@ -2323,13 +2357,20 @@ void PianoRollComponent::postDragHint (const juce::MouseEvent& e)
             hint.text = tr ("Resizing {0} note(s)  [Alt] no snap", { count });
             hint.value = juce::String ((double) notes[(std::size_t) dragNote].length / ticksPerStep, 2) + " " + tr ("steps");
             break;
+        case Drag::laneResize:
+            hint.text = tr ("Resizing controller lane");
+            hint.value = juce::String (velocityHeight) + " px";
+            break;
         case Drag::eventDraw:
         case Drag::eventErase:
         {
             const auto lane = velocityArea();
             const auto value = juce::jlimit (0.0f, 1.0f, (float) (lane.getBottom() - 2 - e.y) / (float) (lane.getHeight() - 8));
             hint.text = drag == Drag::eventErase ? tr ("Deleting events") : tr ("Drawing events: {0}", { laneBox.getText() });
-            hint.value = juce::String (juce::roundToInt (value * 100.0f)) + "%";
+            const auto id = laneBox.getSelectedId();
+            hint.value = (id >= ccLaneIdBase && id < ccLaneIdBase + 128)
+                             ? (juce::String (juce::roundToInt (value * 127.0f)) + " (" + juce::String (juce::roundToInt (value * 100.0f)) + "%)")
+                             : (juce::String (juce::roundToInt (value * 100.0f)) + "%");
             break;
         }
         case Drag::velocity:
@@ -2548,6 +2589,12 @@ void PianoRollComponent::updateCursor (juce::ModifierKeys mods)
     const auto p = lastMouse;
     auto cursor = gesture::Cursor::normal;
 
+    if (p.x >= 0 && onLaneResizeBorder (p))
+    {
+        setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+        return;
+    }
+
     if (p.x < keyboardWidth && p.y >= headerHeight && p.y < gridArea().getBottom())
         cursor = flmods::ctrl (mods) ? gesture::Cursor::select : gesture::Cursor::point;
     else if (velocityArea().contains (p))
@@ -2584,6 +2631,13 @@ ui::Hint PianoRollComponent::hintAt (juce::Point<int> p)
     {
         hint.text = tr ("Keyboard: [LMB] hear the key (further right = louder)  [Ctrl][LMB] select its notes  [MMB] drag: taller / shorter keys");
         hint.value = keyName (h.key) + "  " + tr ("vel {0}", { juce::String (juce::roundToInt (keyVelocityAt (p.x, h.key) * 127.0f)) });
+        return hint;
+    }
+
+    if (onLaneResizeBorder (p))
+    {
+        hint.text = tr ("Drag up or down to resize the controller lane");
+        hint.value = juce::String (velocityHeight) + " px";
         return hint;
     }
 
@@ -4291,8 +4345,17 @@ void PianoRollComponent::rebuildLaneBox (std::optional<AutomationTarget> shown, 
     auto id = (previous >= 1 && previous <= 3) || (previous >= ccLaneIdBase && previous < ccLaneIdBase + 130) ? previous : 1;
     if (shown)
     {
-        if (shown->kind == AutomationTargetKind::channelParam && shown->index == engine.getSelectedChannel() && midictl::isCc (shown->param))
-            id = ccLaneIdBase + (shown->param - midictl::ccBase);
+        if (shown->kind == AutomationTargetKind::channelParam && shown->index == engine.getSelectedChannel())
+        {
+            if (midictl::isCc (shown->param))
+                id = ccLaneIdBase + (shown->param - midictl::ccBase);
+            else if (shown->param == midictl::pitchBendBase)
+                id = ccLaneIdBase + 128;
+            else if (shown->param == midictl::pressureBase)
+                id = ccLaneIdBase + 129;
+            else
+                id = eventLaneIdBase + (int) (std::find (eventTargets.begin(), eventTargets.end(), *shown) - eventTargets.begin());
+        }
         else
             id = eventLaneIdBase + (int) (std::find (eventTargets.begin(), eventTargets.end(), *shown) - eventTargets.begin());
     }

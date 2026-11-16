@@ -156,13 +156,16 @@ public:
     static constexpr int timelineHeight = 22;
     static constexpr int rulerTop = toolbarHeight + overviewHeight;
     static constexpr int headerHeight = rulerTop + timelineHeight;
-    static constexpr int velocityHeight = 72;
+    static constexpr int minVelocityHeight = 44;
+    static constexpr int maxVelocityHeight = 320;
+    static constexpr int laneResizeGrip = 8;
+    int velocityHeight = 72;
     int rowHeight = 14; // vertical zoom (Ctrl+middle-drag, Ctrl+Alt+wheel): gesture::minKeyHeight..maxKeyHeight px per key
     static constexpr int scrollBarSize = 12;
 
 private:
     enum class Drag { none, move, resize, resizeLeft, erase, keyboard, select, velocity, velocityLine, velocitySet, paint, muting, knife,
-                      zoomRange, listen, pan, keyZoom, timeZoom, keySelect, rulerSelect, seek, drumPaint, stretch, eventDraw, eventErase };
+                      zoomRange, listen, pan, keyZoom, timeZoom, keySelect, rulerSelect, seek, drumPaint, stretch, eventDraw, eventErase, laneResize };
 
     // Channel selector: the wheel steps through the channels with notes (Ctrl+wheel: all channels).
     class ChannelBox final : public juce::ComboBox
@@ -352,6 +355,8 @@ private:
     int scrollY = (127 - 84) * rowHeight;       // starts showing roughly C6..C3
 
     Drag drag = Drag::none;
+    bool onLaneResizeBorder (juce::Point<int> p) const noexcept;
+    int laneResizeStartY = 0, laneResizeStartHeight = 72;
     int dragNote = -1;              // grabbed note (reference for snap and preview)
     std::vector<int> dragIndices;   // notes that follow the drag
     std::vector<Note> dragOriginals;

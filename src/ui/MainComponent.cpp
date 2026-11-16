@@ -204,8 +204,8 @@ MainComponent::MainComponent (AudioEngine& e, bool restoreUserSettings)
         const auto key = shortcutText (id).trim();
         return key.isEmpty() ? text : text + " (" + key + ")";
     };
-    undoButton.setTooltip (withKey (tr ("Undo"), "edit.undo"));
-    undoButton.onClick = [this] { flUndo(); }; // FL's toolbar Undo is its Edit › Undo (UndoAction)
+    undoButton.setTooltip (withKey (tr ("Undo backwards"), "edit.undoBackwards"));
+    undoButton.onClick = [this] { undoRedo (false); };
     undoButton.onRightClick = [this] { showHistory(); };
     redoButton.setTooltip (withKey (tr ("Redo"), "edit.redo"));
     redoButton.onClick = [this] { undoRedo (true); };
