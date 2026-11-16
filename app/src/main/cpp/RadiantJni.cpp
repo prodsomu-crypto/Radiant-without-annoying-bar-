@@ -389,6 +389,20 @@ Java_com_radiant_daw_NativeBridge_handleTouchPinch(JNIEnv* env, jclass, jlong pe
     }
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_radiant_daw_NativeBridge_isMultitouchArea(JNIEnv* env, jclass, jlong peerHost, jobject peerView,
+                                                   jfloat localX, jfloat localY, jint viewWidth, jint viewHeight)
+{
+    if (auto* peer = resolvePeer (env, peerView, peerHost))
+    {
+        const auto pt = toPeerPoint (*peer, localX, localY, viewWidth, viewHeight).roundToInt();
+        for (auto* c = peer->getComponent().getComponentAt (pt); c != nullptr; c = c->getParentComponent())
+            if ((bool) c->getProperties().getWithDefault ("lynxMultitouch", false))
+                return JNI_TRUE;
+    }
+    return JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_radiant_daw_NativeBridge_cancelQuickTouch(JNIEnv*, jclass)
 {

@@ -189,6 +189,7 @@ public final class ComponentPeerView extends ViewGroup
     private native void handleAccessibilityHover (long host, int action, float x, float y, long time);
 
     private boolean twoFingerGesture = false;
+    private boolean multitouchPassthrough = false;
     private int activePrimaryPointerId = -1;
     private long primaryDownTime = 0;
     private float primaryDownRawX = 0.0f;
@@ -239,6 +240,7 @@ public final class ComponentPeerView extends ViewGroup
         {
             case MotionEvent.ACTION_DOWN:
                 twoFingerGesture = false;
+                multitouchPassthrough = com.radiant.daw.NativeBridge.isMultitouchArea (host, this, event.getX (0), event.getY (0), getWidth(), getHeight());
                 activePrimaryPointerId = event.getPointerId (0);
                 primaryDownTime = time;
                 primaryDownRawX = pointerRawX (event, 0);
@@ -247,7 +249,22 @@ public final class ComponentPeerView extends ViewGroup
                 return true;
 
             case MotionEvent.ACTION_CANCEL:
+                if (multitouchPassthrough)
+                {
+                    for (int i = 0; i < event.getPointerCount(); ++i)
+                        handleMouseUp (host, event.getPointerId (i), pointerRawX (event, i), pointerRawY (event, i), time);
+                    multitouchPassthrough = false;
+                    activePrimaryPointerId = -1;
+                    return true;
+                }
             case MotionEvent.ACTION_UP:
+                if (multitouchPassthrough)
+                {
+                    handleMouseUp (host, event.getPointerId (0), pointerRawX (event, 0), pointerRawY (event, 0), time);
+                    multitouchPassthrough = false;
+                    activePrimaryPointerId = -1;
+                    return true;
+                }
                 if (! twoFingerGesture && activePrimaryPointerId != -1)
                     handleMouseUp (host, event.getPointerId (0), pointerRawX (event, 0), pointerRawY (event, 0), time);
                 twoFingerGesture = false;
@@ -257,6 +274,13 @@ public final class ComponentPeerView extends ViewGroup
 
             case MotionEvent.ACTION_MOVE:
             {
+                if (multitouchPassthrough)
+                {
+                    int n = event.getPointerCount();
+                    for (int i = 0; i < n; ++i)
+                        handleMouseDrag (host, event.getPointerId (i), pointerRawX (event, i), pointerRawY (event, i), time);
+                    return true;
+                }
                 if (twoFingerGesture)
                 {
                     if (event.getPointerCount() >= 2)
@@ -300,6 +324,12 @@ public final class ComponentPeerView extends ViewGroup
 
             case MotionEvent.ACTION_POINTER_UP:
             {
+                if (multitouchPassthrough)
+                {
+                    int i = event.getActionIndex();
+                    handleMouseUp (host, event.getPointerId (i), pointerRawX (event, i), pointerRawY (event, i), time);
+                    return true;
+                }
                 if (! twoFingerGesture)
                 {
                     int i = (action & MotionEvent.ACTION_POINTER_INDEX_MASK) >> MotionEvent.ACTION_POINTER_INDEX_SHIFT;
@@ -313,6 +343,12 @@ public final class ComponentPeerView extends ViewGroup
 
             case MotionEvent.ACTION_POINTER_DOWN:
             {
+                if (multitouchPassthrough)
+                {
+                    int i = event.getActionIndex();
+                    handleMouseDown (host, event.getPointerId (i), pointerRawX (event, i), pointerRawY (event, i), time);
+                    return true;
+                }
                 if (event.getPointerCount() >= 2)
                 {
                     if (! twoFingerGesture)

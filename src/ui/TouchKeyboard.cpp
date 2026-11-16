@@ -40,6 +40,8 @@ public:
                                                 })
     {
         setRepaintsOnMouseActivity (false);
+        setMouseClickGrabsKeyboardFocus (false);
+        getProperties().set ("lynxMultitouch", true);
     }
 
     ~Keys() override { notes.releaseAll(); }

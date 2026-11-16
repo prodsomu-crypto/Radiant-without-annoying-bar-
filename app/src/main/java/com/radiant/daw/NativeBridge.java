@@ -47,4 +47,5 @@ public final class NativeBridge {
     public static native void handleTouchPinch(long peerHost, Object peerView, float localX, float localY,
                                                int viewWidth, int viewHeight, float scale, boolean vertical, long timeMs);
     public static native void cancelQuickTouch();
+    public static native boolean isMultitouchArea(long peerHost, Object peerView, float localX, float localY, int viewWidth, int viewHeight);
 }
