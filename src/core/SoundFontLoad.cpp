@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -437,11 +438,15 @@ std::shared_ptr<const Font> loadFontFile (const std::string& path, std::string* 
 {
     if (sfz::isSfzPath (path)) // an SFZ instrument (round 167o): its regions and samples as a one-preset font
         return sfz::loadFile (path, error);
+   #ifdef _WIN32
     std::ifstream in (std::filesystem::path ((const char8_t*) path.c_str()), std::ios::binary);
+   #else
+    std::ifstream in (path, std::ios::binary);
+   #endif
     if (! in)
     {
         if (error != nullptr)
-            *error = "file not found";
+            *error = std::string ("file not found: ") + std::strerror (errno);
         return nullptr;
     }
     in.seekg (0, std::ios::end);
@@ -496,11 +501,15 @@ FontInfo scanFontFile (const std::string& path)
     if (sfz::isSfzPath (path))
         return sfz::scanFile (path);
     // reads the chunk headers and every chunk but the sample data
+   #ifdef _WIN32
     std::ifstream in (std::filesystem::path ((const char8_t*) path.c_str()), std::ios::binary);
+   #else
+    std::ifstream in (path, std::ios::binary);
+   #endif
     if (! in)
     {
         FontInfo info;
-        info.error = "could not open file";
+        info.error = std::string ("could not open file: ") + std::strerror (errno) + " (" + path + ")";
         return info;
     }
     in.seekg (0, std::ios::end);

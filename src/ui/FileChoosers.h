@@ -209,14 +209,16 @@ inline void importDocumentToFileAsync (juce::URL url, juce::File destFolder, juc
 {
     auto job = [url = std::move (url), destFolder = std::move (destFolder), fallbackName = std::move (fallbackName), callback] () mutable {
         ImportDocumentResult result;
+        bool needCopy = ! url.isLocalFile();
         if (url.isLocalFile())
         {
             result.file = url.getLocalFile();
             result.name = result.file.getFileName();
-            if (! result.file.existsAsFile())
-                result.error = "Selected file does not exist";
+            juce::FileInputStream testOpen (result.file);
+            if (! result.file.existsAsFile() || ! testOpen.openedOk())
+                needCopy = true;
         }
-        else
+        if (needCopy)
         {
             std::unique_ptr<juce::InputStream> input;
            #if JUCE_ANDROID
@@ -241,6 +243,8 @@ inline void importDocumentToFileAsync (juce::URL url, juce::File destFolder, juc
                 if (result.name.isEmpty())
                     result.name = fallbackName;
 
+                if (! destFolder.createDirectory())
+                    destFolder = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("imported-soundfonts");
                 destFolder.createDirectory();
                 auto legal = juce::File::createLegalFileName (result.name);
                 if (legal.isEmpty())
