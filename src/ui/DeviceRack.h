@@ -258,6 +258,8 @@ private:
 
         static std::unique_ptr<juce::Component> createEmbedded (AudioEngine& eng, int t, int s, const EffectSlot& fx)
         {
+            if (fx.kind == EffectKind::patcher)
+                return PatcherWindows::makeSlotEditor (eng, t, s);
             if (fx.kind == EffectKind::parametricEq || fx.kind == EffectKind::eq)
                 return makeParametricEqEditor (eng, t, s);
             if (fx.kind == EffectKind::facetEq)
@@ -330,7 +332,7 @@ private:
     {
         if (fx.kind == EffectKind::parametricEq || fx.kind == EffectKind::eq) ParametricEqWindows::open (eng, t, s);
         else if (fx.kind == EffectKind::facetEq) FacetEqWindows::open (eng, t, s);
-        else if (fx.kind == EffectKind::patcher) PatcherWindows::openEffect (eng, t, s);
+        else if (fx.kind == EffectKind::patcher) PatcherWindows::openSlot (eng, t, s);
         else if (ProEditorWindows::handles (fx.kind)) ProEditorWindows::open (eng, t, s);
         else if (VisualWindows::handles (fx.kind)) VisualWindows::open (eng, t, s);
         else if (FlExtraWindows::handles (fx.kind)) FlExtraWindows::open (eng, t, s);
