@@ -777,9 +777,7 @@ private:
 
                                                   ? tr ("This file is not a SoundFont Radiant can read.")
 
-                                                  : tr ("This file is not a SoundFont Radiant can read.") + "
-
-" + juce::String::fromUTF8 (sfError.c_str());
+        : tr ("This file is not a SoundFont Radiant can read.") + " " + juce::String::fromUTF8 (sfError.c_str());
 
                                               juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"), msg);
 
