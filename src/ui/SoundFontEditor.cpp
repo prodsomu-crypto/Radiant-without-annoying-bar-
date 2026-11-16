@@ -767,11 +767,24 @@ private:
                                           }
                                           const auto path = std8 (imported.file.getFullPathName());
                                           int bank = 0, program = 0;
-                                          if (! firstSoundFontPreset (path, bank, program))
+                                          std::string sfError;
+
+                                          if (! firstSoundFontPreset (path, bank, program, &sfError))
+
                                           {
-                                              juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"),
-                                                                                      tr ("This file is not a SoundFont Radiant can read."));
+
+                                              const auto msg = sfError.empty()
+
+                                                  ? tr ("This file is not a SoundFont Radiant can read.")
+
+                                                  : tr ("This file is not a SoundFont Radiant can read.") + "
+
+" + juce::String::fromUTF8 (sfError.c_str());
+
+                                              juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"), msg);
+
                                               return;
+
                                           }
                                           loadInto (safe->engine, safe->channel, path, bank, program);
                                           sf::PresetIndex::shared().addFont (path);
@@ -1121,11 +1134,15 @@ void loadSoundFontInto (AudioEngine& engine, int channel, const std::string& pat
     loadInto (engine, SfTarget::rack (channel), path, bank, program);
 }
 
-bool firstSoundFontPreset (const std::string& path, int& bank, int& program)
+bool firstSoundFontPreset (const std::string& path, int& bank, int& program, std::string* error)
 {
     const auto info = sf::scanFontFile (path);
     if (! info.valid)
+    {
+        if (error != nullptr)
+            *error = info.error;
         return false;
+    }
     bank = 0, program = 0;
     bool first = true;
     for (const auto& p : info.presets)

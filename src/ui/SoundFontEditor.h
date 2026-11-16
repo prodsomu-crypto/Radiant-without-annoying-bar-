@@ -37,7 +37,7 @@ int addSoundFontChannel (AudioEngine& engine, const std::string& path, int bank,
 void loadSoundFontInto (AudioEngine& engine, int channel, const std::string& path, int bank, int program);
 
 // The lowest bank:patch of a font file (false: not a readable SoundFont)
-bool firstSoundFontPreset (const std::string& path, int& bank, int& program);
+bool firstSoundFontPreset (const std::string& path, int& bank, int& program, std::string* error = nullptr);
 // A dropped / opened .sf2 / .sf3: into `channel` when it is a LYNX Soundfont, else a new channel; false when unreadable
 bool openSoundFontFile (AudioEngine& engine, const juce::File& file, int channel = -1);
 

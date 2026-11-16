@@ -115,6 +115,7 @@ struct FontInfo
     std::string name;            // INAM
     std::vector<PresetInfo> presets; // in the file's order
     bool valid = false;
+    std::string error;
 };
 
 // Only the header chunks (no sample data is read): what the preset browser indexes. Validates the hydra (every

@@ -127,6 +127,11 @@ Chunks locate (const std::uint8_t* data, std::size_t size, bool needSamples)
                         if (std::memcmp (sid, names[k], 4) == 0)
                             *spans[k] = span;
                 }
+                if (std::memcmp (type, "sdta", 4) == 0 && ! needSamples)
+                {
+                    p = sbody;
+                    continue;
+                }
                 if (slen > listEnd - std::min (listEnd, sbody))
                     break;
                 p = sbody + slen + (slen & 1);
@@ -156,13 +161,14 @@ Chunks locate (const std::uint8_t* data, std::size_t size, bool needSamples)
         for (std::size_t i = 0; i < n; ++i)
         {
             const auto idx = (std::size_t) u16 (owners.data + i * rec + at);
+            if (i + 1 == n && idx == 0) return true;
             if (idx < last || idx > children)
                 return false;
             last = idx;
         }
         return true;
     };
-    if (! check (c.phdr, 38, 24, c.pbag.size / 4 - 1) || ! check (c.pbag, 4, 0, c.pgen.size / 4) || ! check (c.inst, 22, 20, c.ibag.size / 4 - 1)
+    if (! check (c.phdr, 38, 24, c.pbag.size / 4) || ! check (c.pbag, 4, 0, c.pgen.size / 4) || ! check (c.inst, 22, 20, c.ibag.size / 4)
         || ! check (c.ibag, 4, 0, c.igen.size / 4))
     {
         c.error = "damaged SoundFont (preset data out of range)";
@@ -176,7 +182,10 @@ FontInfo infoOf (const Chunks& c)
 {
     FontInfo info;
     if (! c.ok)
+    {
+        info.error = c.error;
         return info;
+    }
     if (c.inam.data != nullptr)
         for (std::size_t i = 0; i < c.inam.size && c.inam.data[i] != 0 && i < 256; ++i)
             info.name.push_back ((char) c.inam.data[i]);
@@ -194,7 +203,7 @@ template <typename T, std::size_t Rec>
 T* readArray (const Span& s, int& count, void (*read) (T*, const std::uint8_t*))
 {
     count = (int) (s.size / Rec);
-    auto* out = (T*) std::calloc ((std::size_t) std::max (1, count), sizeof (T));
+    auto* out = (T*) std::calloc ((std::size_t) std::max (1, count + 1), sizeof (T));
     if (out != nullptr)
         for (int i = 0; i < count; ++i)
             read (out + i, s.data + (std::size_t) i * Rec);
@@ -442,13 +451,21 @@ FontInfo scanFontFile (const std::string& path)
     // reads the chunk headers and every chunk but the sample data
     std::ifstream in (std::filesystem::path ((const char8_t*) path.c_str()), std::ios::binary);
     if (! in)
-        return {};
+    {
+        FontInfo info;
+        info.error = "could not open file";
+        return info;
+    }
     in.seekg (0, std::ios::end);
     const auto fileSize = (std::uint64_t) std::max<std::streamoff> (0, in.tellg());
     in.seekg (0);
     std::uint8_t head[12];
     if (fileSize < 12 || ! in.read ((char*) head, 12) || std::memcmp (head, "RIFF", 4) != 0 || std::memcmp (head + 8, "sfbk", 4) != 0)
-        return {};
+    {
+        FontInfo info;
+        info.error = "not a SoundFont (missing RIFF sfbk header)";
+        return info;
+    }
     // a copy of the file with the sample chunk's contents left out (its header kept, its size intact)
     std::vector<std::uint8_t> bytes (head, head + 12);
     std::uint64_t pos = 12;

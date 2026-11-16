@@ -1,0 +1,2306 @@
+]633;E;echo "=== EditorGestures ===";2120fba0-400c-4d59-8e4a-3930cbfb2b4e]633;C=== EditorGestures ===
+     1	#pragma once
+     2	
+     3	// The mouse grammar of the Piano Roll and the Playlist, without JUCE (unit-tested in
+     4	// tests/EditorGestureTests.inc). The editors ask these functions what a press would do at the
+     5	// point under the mouse, so the cursor, the hover highlight and the hint bar always tell the
+     6	// same story as the click itself. Behaviour interpreted from the FL Studio manual's Piano Roll
+     7	// and Playlist pages (docs/WORKFLOW_FL.md R1-R25, P1-P17), clean-room.
+     8	
+     9	#include <algorithm>
+    10	#include <cmath>
+    11	#include <cstdint>
+    12	
+    13	namespace lynx
+    14	{
+    15	// The editors' tools (the strip in their toolbar).
+    16	enum class EditTool
+    17	{
+    18	    pencil, // add, move and resize (the default gestures)
+    19	    brush,  // drag lays a run of notes / clips (Shift: one note at a time in the Piano Roll)
+    20	    drumPaint, // Piano Roll only: drag lays one short note per grid cell, following the mouse across keys
+    21	    eraser, // click or drag deletes
+    22	    mute,   // click or drag mutes / unmutes
+    23	    knife,  // drag a line to cut through notes / clips; a click cuts at the cursor
+    24	    lasso,  // click selects, drag draws a selection box (Shift adds)
+    25	    zoom,   // drag a range to zoom into it; a click zooms back out
+    26	    listen, // click or drag to hear notes (Piano Roll) or play from there (Playlist)
+    27	    slip    // Playlist only: drag inside a clip to move its content under it
+    28	};
+    29	
+    30	namespace gesture
+    31	{
+    32	// --- hit testing -------------------------------------------------------------------------------
+    33	
+    34	// Where on an item (note or clip) spanning [x0, x1) pixels the mouse is.
+    35	enum class Zone
+    36	{
+    37	    outside,
+    38	    body,
+    39	    leftEdge,
+    40	    rightEdge
+    41	};
+    42	
+    43	struct EdgeRules
+    44	{
+    45	    double grab = 6.0;             // widest edge zone, in pixels
+    46	    double minimumHit = 4.0;       // very short items are still this wide to the mouse
+    47	    double minimumForLeft = 16.0;  // narrower items only offer the right edge (the body must stay grabbable)
+    48	    bool allowLeft = true;         // the left edge resizes / trims
+    49	};
+    50	
+    51	// The edge zone shrinks with the item (a quarter of its width, at most `grab`), so a short note is
+    52	// still mostly "body" and can be moved; the right edge always wins over the left one.
+    53	inline Zone zoneAt (double x, double x0, double x1, const EdgeRules& rules = {})
+    54	{
+    55	    const auto right = std::max (x1, x0 + rules.minimumHit);
+    56	
+    57	    if (x < x0 || x >= right)
+    58	        return Zone::outside;
+    59	
+    60	    const auto width = right - x0;
+    61	    const auto edge = std::clamp (width / 4.0, 2.0, rules.grab);
+    62	
+    63	    if (x >= right - edge)
+    64	        return Zone::rightEdge;
+    65	    if (rules.allowLeft && width >= rules.minimumForLeft && x < x0 + edge)
+    66	        return Zone::leftEdge;
+    67	    return Zone::body;
+    68	}
+    69	
+    70	// --- what a left press does ----------------------------------------------------------------------
+    71	
+    72	struct Mods
+    73	{
+    74	    bool shift = false, ctrl = false, alt = false;
+    75	};
+    76	
+    77	// What is under the mouse in an editor's grid.
+    78	enum class Target
+    79	{
+    80	    empty,       // background
+    81	    item,        // body of a note / clip
+    82	    leftEdge,    // left edge of a note / clip
+    83	    rightEdge,   // right edge of a note / clip
+    84	    fadeHandle,  // Playlist: fade handle of an audio clip
+    85	    gainHandle,  // Playlist: an audio clip's gain handle (bottom centre, FL 2026; round 166e)
+    86	    autoPoint,   // Playlist: a point of an inline automation curve
+    87	    autoCurve,   // Playlist: on an automation curve (a click adds a point)
+    88	    autoTension, // Playlist: the tension handle between two automation points (drag up / down bends)
+    89	    clipMenu     // Playlist: the menu button in a clip's title strip
+    90	};
+    91	
+    92	inline Target targetFor (Zone zone)
+    93	{
+    94	    switch (zone)
+    95	    {
+    96	        case Zone::body: return Target::item;
+    97	        case Zone::leftEdge: return Target::leftEdge;
+    98	        case Zone::rightEdge: return Target::rightEdge;
+    99	        case Zone::outside: break;
+   100	    }
+   101	    return Target::empty;
+   102	}
+   103	
+   104	enum class Action
+   105	{
+   106	    none,
+   107	    create,       // draws a new note / places a clip and drags it
+   108	    paint,        // brush: lays a run while dragging
+   109	    move,         // drags the item (and the selection it belongs to)
+   110	    copyMove,     // Shift: drags a copy
+   111	    resizeRight,  // drags the end
+   112	    resizeLeft,   // drags the start (Playlist: trims, keeping the content in place)
+   113	    slipContent,  // moves a clip's content under it
+   114	    toggleSelect, // Ctrl+click: adds / removes from the selection
+   115	    boxSelect,    // draws a selection box
+   116	    erase,
+   117	    toggleMute,
+   118	    slice,
+   119	    zoomRange,
+   120	    listen,
+   121	    fade,         // drags an audio fade
+   122	    clipGain,     // drags an audio clip's gain up / down
+   123	    movePoint,    // drags an automation point
+   124	    addPoint,     // adds an automation point on the curve
+   125	    bendSegment,  // drags an automation segment's tension handle
+   126	    openMenu      // opens the clip menu
+   127	};
+   128	
+   129	// The action of a left press with `tool` on `target`. `playlist` selects the Playlist's extras
+   130	// (slip, fades, inline automation, clip menu). Mirrors the editors' mouseDown.
+   131	inline Action leftAction (EditTool tool, Target target, Mods mods, bool playlist)
+   132	{
+   133	    const auto onItem = target != Target::empty;
+   134	
+   135	    if (target == Target::clipMenu)
+   136	        return Action::openMenu;
+   137	
+   138	    // every tool: Ctrl+click toggles an item in the selection; Ctrl+drag on empty space selects
+   139	    if (mods.ctrl)
+   140	        return onItem ? Action::toggleSelect : Action::boxSelect;
+   141	
+   142	    const auto painter = tool == EditTool::brush || tool == EditTool::drumPaint;
+   143	
+   144	    if (tool == EditTool::lasso || (! onItem && mods.shift && ! painter))
+   145	        return Action::boxSelect;
+   146	
+   147	    switch (tool)
+   148	    {
+   149	        case EditTool::eraser: return Action::erase;
+   150	        case EditTool::mute: return Action::toggleMute;
+   151	        case EditTool::knife: return Action::slice;
+   152	        case EditTool::zoom: return Action::zoomRange;
+   153	        case EditTool::listen: return Action::listen;
+   154	        case EditTool::slip: return playlist && onItem ? Action::slipContent : Action::none;
+   155	        case EditTool::pencil:
+   156	        case EditTool::brush:
+   157	        case EditTool::drumPaint:
+   158	        case EditTool::lasso: break;
+   159	    }
+   160	
+   161	    if (playlist)
+   162	    {
+   163	        if (target == Target::autoPoint && ! mods.shift)
+   164	            return Action::movePoint;
+   165	        if (target == Target::autoTension && ! mods.shift)
+   166	            return Action::bendSegment;
+   167	        if (target == Target::autoCurve && ! mods.shift)
+   168	            return Action::addPoint;
+   169	        if (target == Target::fadeHandle)
+   170	            return Action::fade;
+   171	        if (target == Target::gainHandle)
+   172	            return Action::clipGain;
+   173	        if (mods.alt && mods.shift && target == Target::item)
+   174	            return Action::slipContent;
+   175	    }
+   176	
+   177	    switch (target)
+   178	    {
+   179	        case Target::item:
+   180	        case Target::autoPoint:
+   181	        case Target::autoCurve:
+   182	        case Target::autoTension:
+   183	        case Target::fadeHandle:
+   184	        case Target::gainHandle: return mods.shift ? Action::copyMove : Action::move;
+   185	        case Target::rightEdge: return Action::resizeRight;
+   186	        case Target::leftEdge: return Action::resizeLeft;
+   187	        case Target::empty: return painter ? Action::paint : Action::create;
+   188	        case Target::clipMenu: break;
+   189	    }
+   190	
+   191	    return Action::none;
+   192	}
+   193	
+   194	// --- cursors ---------------------------------------------------------------------------------------
+   195	
+   196	enum class Cursor
+   197	{
+   198	    normal,
+   199	    draw,      // pencil
+   200	    paint,     // brush
+   201	    move,      // four-way: moving an item
+   202	    copy,      // moving a copy
+   203	    resizeH,   // left-right: an edge
+   204	    resizeV,   // up-down: a gain handle
+   205	    erase,
+   206	    mute,
+   207	    slice,
+   208	    select,    // crosshair: box selection
+   209	    zoom,
+   210	    listen,
+   211	    slip,
+   212	    point,     // pointing hand: a handle or a button
+   213	    pan        // grabbing hand: middle-drag
+   214	};
+   215	
+   216	inline Cursor cursorFor (Action action, EditTool tool)
+   217	{
+   218	    switch (action)
+   219	    {
+   220	        case Action::create: return Cursor::draw;
+   221	        case Action::paint: return Cursor::paint;
+   222	        case Action::move: return Cursor::move;
+   223	        case Action::copyMove: return Cursor::copy;
+   224	        case Action::resizeRight:
+   225	        case Action::resizeLeft:
+   226	        case Action::fade: return Cursor::resizeH;
+   227	        case Action::clipGain: return Cursor::resizeV;
+   228	        case Action::slipContent: return Cursor::slip;
+   229	        case Action::toggleSelect:
+   230	        case Action::boxSelect: return Cursor::select;
+   231	        case Action::erase: return Cursor::erase;
+   232	        case Action::toggleMute: return Cursor::mute;
+   233	        case Action::slice: return Cursor::slice;
+   234	        case Action::zoomRange: return Cursor::zoom;
+   235	        case Action::listen: return Cursor::listen;
+   236	        case Action::movePoint:
+   237	        case Action::addPoint:
+   238	        case Action::bendSegment:
+   239	        case Action::openMenu: return Cursor::point;
+   240	        case Action::none: break;
+   241	    }
+   242	
+   243	    return tool == EditTool::slip ? Cursor::slip : Cursor::normal;
+   244	}
+   245	
+   246	// --- view maths ------------------------------------------------------------------------------------
+   247	
+   248	// New scroll position (in ticks) after changing the zoom from `oldPixelsPerTick` to `newPixelsPerTick`,
+   249	// keeping the tick under the mouse (`anchorPixels` from the left of the grid) where it is.
+   250	inline double zoomAnchored (double scrollTicks, double oldPixelsPerTick, double newPixelsPerTick, double anchorPixels)
+   251	{
+   252	    const auto anchorTick = scrollTicks + anchorPixels / oldPixelsPerTick;
+   253	    return std::max (0.0, anchorTick - anchorPixels / newPixelsPerTick);
+   254	}
+   255	
+   256	// Zoom factor of one wheel event. Notched wheels step by 1.2 per notch whatever the driver's delta
+   257	// size; smooth (trackpad / high-resolution) wheels zoom in proportion to the delta.
+   258	inline double wheelZoomFactor (double deltaY, bool smooth)
+   259	{
+   260	    if (deltaY == 0.0)
+   261	        return 1.0;
+   262	    if (! smooth)
+   263	        return deltaY > 0.0 ? 1.2 : 1.0 / 1.2;
+   264	    return std::pow (1.2, std::clamp (deltaY, -1.0, 1.0) * 7.0);
+   265	}
+   266	
+   267	// Scroll distance in pixels of one wheel event (notched: ~3 rows per notch; smooth: proportional).
+   268	inline double wheelScrollPixels (double delta, bool smooth, double pixelsPerNotch)
+   269	{
+   270	    if (delta == 0.0)
+   271	        return 0.0;
+   272	    if (! smooth)
+   273	        return (delta > 0.0 ? -1.0 : 1.0) * pixelsPerNotch;
+   274	    return -delta * pixelsPerNotch * 7.0;
+   275	}
+   276	
+   277	// --- trackpads (round 170e, Busy Works review #17: no quick zoom with a trackpad on macOS) ----------------------
+   278	// Windows: precision touchpads (two-finger scrolling, and the pinch, which Windows sends as Ctrl+wheel) and
+   279	// high-resolution wheels send WM_MOUSEWHEEL in pieces of a notch, and JUCE reports every piece as a notched event
+   280	// (isSmooth false, one notch = 0.5 x 120 / 256 in its units): each piece then scrolled or zoomed a whole notch.
+   281	// A delta under 3/4 of a notch is such a piece: it becomes a smooth delta of the same size (one notch = 1/7 in the
+   282	// smooth formulas above), so a pinch zooms as far as the fingers move. Notched wheels are unchanged.
+   283	constexpr double windowsWheelNotch = 60.0 / 256.0;
+   284	
+   285	struct WheelDelta
+   286	{
+   287	    double x = 0.0, y = 0.0;
+   288	    bool smooth = false;
+   289	};
+   290	
+   291	inline WheelDelta normaliseWheel (double deltaX, double deltaY, bool smooth, bool windows)
+   292	{
+   293	    const auto piece = [] (double d) { return d != 0.0 && std::abs (d) < 0.75 * windowsWheelNotch; };
+   294	    if (smooth || ! windows || ! (piece (deltaX) || piece (deltaY)))
+   295	        return { deltaX, deltaY, smooth };
+   296	    return { deltaX / windowsWheelNotch / 7.0, deltaY / windowsWheelNotch / 7.0, true };
+   297	}
+   298	
+   299	// The zoom factor of one trackpad pinch event (macOS magnifyWithEvent, Windows GID_ZOOM: JUCE's mouseMagnify `scale`,
+   300	// 1 = no change), limited so that one event never jumps more than x2.
+   301	inline double pinchZoomFactor (double scale)
+   302	{
+   303	    if (! (scale > 0.0) || ! std::isfinite (scale))
+   304	        return 1.0;
+   305	    return std::clamp (scale, 0.5, 2.0);
+   306	}
+   307	
+   308	// --- middle-drag zooms (round 167t, issue #26; FL 2026 evidence in docs/analise/REA_rodada167t.md) ---------------
+   309	// Key height range of the Piano roll. FL's is 18..116 px (16 + 2 px per zoom level 1..50); LYNX also goes
+   310	// shorter, down to 6 px.
+   311	constexpr int minKeyHeight = 6, maxKeyHeight = 116;
+   312	
+   313	// The vertical zoom drag: Ctrl+middle-drag on the Piano roll's notes (or the Playlist's clips) and middle-drag on
+   314	// the Piano roll keyboard. Like FL's zoom knob it only follows the vertical travel: up = taller, one zoom level
+   315	// (2 px) per 4 px of travel, per 16 px while Ctrl is held (fine). The travel is not clamped at the limits.
+   316	struct HeightZoomDrag
+   317	{
+   318	    double travel = 0.0; // knob units (4 per pixel, 1 per pixel fine)
+   319	    int lastY = 0;
+   320	
+   321	    void begin (int y) noexcept { travel = 0.0; lastY = y; }
+   322	
+   323	    void move (int y, bool fine) noexcept
+   324	    {
+   325	        travel += (double) (lastY - y) * (fine ? 1.0 : 4.0);
+   326	        lastY = y;
+   327	    }
+   328	
+   329	    // whole zoom levels gained since the press
+   330	    int levels() const noexcept { return (int) std::lround (travel / 16.0); }
+   331	
+   332	    int height (int startHeight, int lo = minKeyHeight, int hi = maxKeyHeight) const noexcept
+   333	    {
+   334	        return std::clamp (startHeight + 2 * levels(), lo, hi);
+   335	    }
+   336	};
+   337	
+   338	// The horizontal zoom drag of FL's time scroll bar: middle-drag on the ruler, Alt+middle-drag in the grid.
+   339	// Each move's vertical travel (at most 32 px a move) accumulates and the visible span becomes the span at the
+   340	// press times 2^(-up / 100) (100 px up = twice the zoom) around the view's centre; the horizontal travel moves the
+   341	// centre by half a view per 100 px (rightwards = later), except while Ctrl is held (zoom only).
+   342	struct SpanZoomDrag
+   343	{
+   344	    double startSpan = 1.0, span = 1.0, centre = 0.0, up = 0.0;
+   345	    int lastX = 0, lastY = 0;
+   346	
+   347	    void begin (double visibleSpan, double viewCentre, int x, int y) noexcept
+   348	    {
+   349	        startSpan = span = std::max (1.0e-9, visibleSpan);
+   350	        centre = viewCentre;
+   351	        up = 0.0;
+   352	        lastX = x;
+   353	        lastY = y;
+   354	    }
+   355	
+   356	    void move (int x, int y, bool ctrl) noexcept
+   357	    {
+   358	        up += std::clamp ((double) (lastY - y), -32.0, 32.0);
+   359	        span = startSpan * std::pow (2.0, -up * 0.01);
+   360	        if (! ctrl)
+   361	            centre += (double) (x - lastX) * span * 0.5 * 0.01;
+   362	        centre = std::max (0.0, centre);
+   363	        lastX = x;
+   364	        lastY = y;
+   365	    }
+   366	};
+   367	
+   368	// A value that glides towards its target (smooth wheel scrolling). `step` advances it by one frame.
+   369	struct Glide
+   370	{
+   371	    double current = 0.0, target = 0.0;
+   372	
+   373	    void jumpTo (double v) noexcept { current = target = v; }
+   374	    bool isMoving() const noexcept { return current != target; }
+   375	
+   376	    // 60 Hz frames: covers ~45% of the remaining distance per frame, snaps the last half pixel
+   377	    double step (double fraction = 0.45, double settle = 0.5) noexcept
+   378	    {
+   379	        current += (target - current) * fraction;
+   380	        if (std::abs (target - current) < settle)
+   381	            current = target;
+   382	        return current;
+   383	    }
+   384	};
+   385	
+   386	// Value on the straight line from (x0, v0) to (x1, v1) at x (the event lane's right-drag line), 0..1.
+   387	inline double lineValue (double x0, double v0, double x1, double v1, double x)
+   388	{
+   389	    if (x1 == x0)
+   390	        return std::clamp (v1, 0.0, 1.0);
+   391	    const auto t = (x - x0) / (x1 - x0);
+   392	    return std::clamp (v0 + (v1 - v0) * t, 0.0, 1.0);
+   393	}
+   394	
+   395	// FL's Piano roll keyboard: where a key is clicked sets the note's velocity, soft at the
+   396	// key's base and full at its tip (`along` pixels from the base of a key `length` pixels long), 1/127 at least.
+   397	inline float keyClickVelocity (double along, double length)
+   398	{
+   399	    if (length <= 0.0)
+   400	        return 0.8f;
+   401	    return (float) std::clamp ((along + 1.0) / length, 1.0 / 127.0, 1.0);
+   402	}
+   403	
+   404	// Alt+wheel over a note: the property moves by 4/127 per notch (Ctrl+Alt: 1/127), clamped to 0..1.
+   405	inline double wheelStepValue (double value, double deltaY, bool fine)
+   406	{
+   407	    if (deltaY == 0.0)
+   408	        return value;
+   409	    const auto step = (fine ? 1.0 : 4.0) / 127.0;
+   410	    return std::clamp (value + (deltaY > 0.0 ? step : -step), 0.0, 1.0);
+   411	}
+   412	
+   413	// Font height for the keyboard and note labels: follows the row height, readable at every zoom.
+   414	inline float labelHeight (int rowHeight)
+   415	{
+   416	    return std::clamp ((float) rowHeight * 0.72f, 9.0f, 13.0f);
+   417	}
+   418	
+   419	// Whether a note label fits: the row must be tall enough to read and the note wide enough for "C#5".
+   420	inline bool noteLabelFits (double widthPixels, int rowHeight)
+   421	{
+   422	    return rowHeight >= 9 && widthPixels >= 3.0 * labelHeight (rowHeight);
+   423	}
+   424	
+   425	// --- overview strip (round 90) ------------------------------------------------------------------
+   426	// The strip above the Piano Roll's and the Playlist's ruler shows the whole content in miniature with
+   427	// the visible window outlined (FL Studio's preview scroll bar, interpreted). Positions are in content
+   428	// units (ticks); `width` is the strip's width in pixels.
+   429	enum class OverviewGrab { none, move, left, right };
+   430	
+   431	struct OverviewWindow
+   432	{
+   433	    double start = 0.0, length = 1.0;
+   434	};
+   435	
+   436	// What a press at `x` grabs: an edge of the window (zooms), the window (scrolls) or nothing (jumps).
+   437	inline OverviewGrab overviewGrabAt (double x, double width, double total, OverviewWindow w, double edgePixels = 5.0)
+   438	{
+   439	    if (total <= 0.0 || width <= 0.0)
+   440	        return OverviewGrab::none;
+   441	
+   442	    const auto x0 = w.start / total * width, x1 = (w.start + w.length) / total * width;
+   443	    // a narrow window keeps a middle zone to move it
+   444	    const auto edge = std::min (edgePixels, std::max (1.0, (x1 - x0) / 3.0));
+   445	
+   446	    if (std::abs (x - x0) <= edge)
+   447	        return OverviewGrab::left;
+   448	    if (std::abs (x - x1) <= edge)
+   449	        return OverviewGrab::right;
+   450	    if (x > x0 && x < x1)
+   451	        return OverviewGrab::move;
+   452	    return OverviewGrab::none;
+   453	}
+   454	
+   455	// The window after dragging `grab` by `dx` pixels from `from`; `minLength` keeps the zoom in range.
+   456	// A press outside the window (none) centres it on the press first, then drags like `move`.
+   457	inline OverviewWindow overviewDrag (OverviewGrab grab, OverviewWindow from, double dx, double width, double total,
+   458	                                    double minLength)
+   459	{
+   460	    if (width <= 0.0 || total <= 0.0)
+   461	        return from;
+   462	
+   463	    const auto d = dx / width * total;
+   464	    auto w = from;
+   465	
+   466	    switch (grab)
+   467	    {
+   468	        case OverviewGrab::none:
+   469	        case OverviewGrab::move:
+   470	            w.start = std::clamp (from.start + d, 0.0, std::max (0.0, total - from.length));
+   471	            break;
+   472	        case OverviewGrab::left:
+   473	        {
+   474	            const auto end = from.start + from.length;
+   475	            w.start = std::clamp (from.start + d, 0.0, std::max (0.0, end - minLength));
+   476	            w.length = end - w.start;
+   477	            break;
+   478	        }
+   479	        case OverviewGrab::right:
+   480	            w.length = std::clamp (from.length + d, minLength, std::max (minLength, total - from.start));
+   481	            break;
+   482	    }
+   483	
+   484	    return w;
+   485	}
+   486	
+   487	// The window centred on content position `at` (a click outside the window jumps there).
+   488	inline OverviewWindow overviewCentredOn (double at, OverviewWindow w, double total)
+   489	{
+   490	    w.start = std::clamp (at - w.length / 2.0, 0.0, std::max (0.0, total - w.length));
+   491	    return w;
+   492	}
+   493	
+   494	// FL 2026 [SHOT, round 165z-b]: a double right-click held down is the Mute tool. The first right-click already deleted
+   495	// the clip under it and FL does not bring it back; while sweeping, the first clip crossed decides one state (unmuted
+   496	// -> mute every clip crossed, muted -> unmute every clip crossed) and each clip is touched once.
+   497	inline bool isDoubleClick (std::uint32_t lastMs, std::uint32_t nowMs, double distancePixels,
+   498	                           std::uint32_t windowMs = 500, double maxPixels = 6.0)
+   499	{
+   500	    return lastMs != 0 && nowMs - lastMs < windowMs && distancePixels < maxPixels;
+   501	}
+   502	
+   503	struct MuteSweep
+   504	{
+   505	    bool decided = false;
+   506	    bool target = true;
+   507	
+   508	    // the state a clip crossed by the sweep gets; the first one decides
+   509	    bool touch (bool clipMuted)
+   510	    {
+   511	        if (! decided)
+   512	        {
+   513	            target = ! clipMuted;
+   514	            decided = true;
+   515	        }
+   516	        return target;
+   517	    }
+   518	};
+   519	} // namespace gesture
+   520	} // namespace lynx
+=== PianoRollComponent EditTool ===
+  1560	
+  1561	    // ruler: a right press on a pattern marker opens its menu (FL's TimePanelMouseDown: the marker menu when the press
+  1562	    // is on the marker lane, REA_rodada168t.md table); the Time markers items are also in the More menu (round 168g)
+  1563	    if (e.y >= rulerTop && e.y < headerHeight && e.x >= keyboardWidth && e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+  1564	        if (const auto mk = markerAtX (e.x); mk >= 0)
+  1565	        {
+  1566	            showPatternMarkerMenu (mk);
+  1567	            return;
+  1568	        }
+  1569	
+  1570	    // ruler: a time-range drag selects the notes in it. FL 2026 (one ruler handler for the Piano roll and the Playlist,
+  1571	    // TimePanelMouseDown 0xe56bf0, REA_rodada168t.md): Ctrl+drag, a double click held and dragged, the Select tool, or
+  1572	    // a right-drag (on a Mac Cmd or Control: core/ModifierMap.h)
+  1573	    if (e.y >= rulerTop && e.y < headerHeight && e.x >= keyboardWidth
+  1574	        && ((e.mods.isLeftButtonDown() && (flmods::ctrl (e.mods) || (! e.source.isTouch() && e.getNumberOfClicks() >= 2) || tools.getTool() == EditTool::lasso))
+  1575	            || (e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))))
+  1576	    {
+  1577	        drag = Drag::rulerSelect;
+  1578	        selectionBefore = e.mods.isShiftDown() ? selection : std::vector<int> {};
+  1579	        return;
+  1580	    }
+  1581	
+  1582	    // ruler: click or drag = position (FL), Alt = off the grid
+  1583	    if (e.y >= rulerTop && e.y < headerHeight && e.x >= keyboardWidth && e.mods.isLeftButtonDown() && ! e.mods.isShiftDown())
+  1584	    {
+  1585	        drag = Drag::seek;
+  1586	        seekAt (e.x, ! e.mods.isAltDown());
+  1587	        return;
+  1588	    }
+  1589	
+  1590	    if (velocityArea().contains (e.getPosition()) && eventLaneTarget())
+  1591	    {
+  1592	        // pattern events: drag draws one event per grid step, right-drag erases
+  1593	        lastVelocityX = e.x;
+  1594	        drag = (e.mods.isRightButtonDown() || tools.getTool() == EditTool::eraser) ? Drag::eventErase : Drag::eventDraw;
+  1595	        drawEvents (e.x, e.x, e.y, drag == Drag::eventErase);
+  1596	        return;
+  1597	    }
+  1598	
+  1599	    if (velocityArea().contains (e.getPosition()))
+  1600	    {
+  1601	        const auto lane = velocityArea();
+  1602	        const auto value = juce::jlimit (0.0f, 1.0f, (float) (lane.getBottom() - 2 - e.y) / (float) (lane.getHeight() - 8));
+  1603	        lastVelocityX = e.x;
+  1604	
+  1605	        if (e.mods.isAltDown() && e.mods.isLeftButtonDown()) // Alt+click resets the notes under the mouse
+  1606	        {
+  1607	            drag = Drag::velocity;
+  1608	            applyLaneValue (e.x, laneBox.getSelectedId() == 1 ? Note().velocity : 0.5f, e.x);
+  1609	            drag = Drag::none;
+  1610	            return;
+  1611	        }
+  1612	
+  1613	        laneOriginals = currentPattern (engine.getSong()).notes;
+  1614	
+  1615	        if (e.mods.isRightButtonDown()) // right-drag draws a straight line of values
+  1616	        {
+  1617	            drag = Drag::velocityLine;
+  1618	            laneSetValue = value;
+  1619	            return;
+  1620	        }
+  1621	
+  1622	        if (e.mods.isShiftDown()) // Shift+drag: every note crossed gets the value of the press
+  1623	        {
+  1624	            drag = Drag::velocitySet;
+  1625	            laneSetValue = value;
+  1626	            applyLaneValue (e.x, value, e.x);
+  1627	            return;
+  1628	        }
+  1629	
+  1630	        drag = Drag::velocity;
+  1631	        applyVelocity (e.x, e.x, e.y);
+  1632	        return;
+  1633	    }
+  1634	
+  1635	    if (! gridArea().contains (e.getPosition()))
+  1636	        return;
+  1637	
+  1638	    // the selection's stretch handle: drag scales the selected notes in time from the selection's start
+  1639	    if (e.mods.isLeftButtonDown() && ! flmods::ctrl (e.mods) && stretchHandle().expanded (2.0f).contains (e.position))
+  1640	    {
+  1641	        const auto& notes = currentPattern (engine.getSong()).notes;
+  1642	        dragIndices.clear();
+  1643	        dragOriginals.clear();
+  1644	
+  1645	        for (auto i : selection)
+  1646	            if (i >= 0 && i < (int) notes.size() && edits (notes[(std::size_t) i]))
+  1647	            {
+  1648	                dragIndices.push_back (i);
+  1649	                dragOriginals.push_back (notes[(std::size_t) i]);
+  1650	            }
+  1651	
+  1652	        noteedit::span (dragOriginals, stretchAnchor, stretchEnd);
+  1653	        dragNote = dragIndices.empty() ? -1 : dragIndices.front();
+  1654	        drag = Drag::stretch;
+  1655	        setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
+  1656	        return;
+  1657	    }
+  1658	
+  1659	    bool rightEdge = false, leftEdge = false;
+  1660	    auto hit = noteAt (e.x, e.y, rightEdge, leftEdge);
+  1661	    const auto tool = tools.getTool();
+  1662	
+  1663	    // Touch double-tap on a note deletes it cleanly
+  1664	    if (e.source.isTouch() && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+  1665	    {
+  1666	        bool dblEdge = false;
+  1667	        const auto dblHit = noteAt (e.x, e.y, dblEdge);
+  1668	        const auto nowMs = juce::Time::getMillisecondCounter();
+  1669	        if (dblHit >= 0 && dblHit == lastTouchTapNote && (nowMs - lastTouchTapMs) < 420
+  1670	            && e.getPosition().getDistanceFrom (lastTouchTapPos) < 28 && (nowMs - createdAt) >= 420)
+  1671	        {
+  1672	            lastTouchTapMs = 0;
+  1673	            lastTouchTapNote = -1;
+  1674	            previewNotes.releaseAll();
+  1675	            drag = Drag::none;
+  1676	            setSelection ({});
+  1677	            editNotes ([dblHit] (Pattern& p) { noteedit::remove (p, { dblHit }); });
+  1678	            return;
+  1679	        }
+  1680	        if (dblHit >= 0)
+  1681	        {
+  1682	            lastTouchTapMs = nowMs;
+  1683	            lastTouchTapPos = e.getPosition();
+  1684	            lastTouchTapNote = dblHit;
+  1685	        }
+  1686	        else
+  1687	        {
+  1688	            lastTouchTapMs = 0;
+  1689	            lastTouchTapNote = -1;
+  1690	        }
+  1691	    }
+  1692	
+  1693	    // Touch-friendly right-edge grab zone: makes holding the edge of a note and dragging to resize effortless on tablets
+  1694	    if (! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods)
+  1695	        && (tool == EditTool::pencil || tool == EditTool::brush || tool == EditTool::lasso))
+  1696	    {
+  1697	        const auto& notes = currentPattern (engine.getSong()).notes;
+  1698	        const auto key = yToKey (e.y);
+  1699	        const auto touchMarginInside = e.source.isTouch() ? 16.0 : 10.0;
+  1700	        const auto touchMarginOutside = e.source.isTouch() ? 14.0 : 6.0;
+  1701	
+  1702	        for (int i = (int) notes.size() - 1; i >= 0; --i)
+  1703	        {
+  1704	            const auto& n = notes[(std::size_t) i];
+  1705	            if (! edits (n) || n.key != key)
+  1706	                continue;
+  1707	
+  1708	            const auto x0 = tickToX ((double) n.start);
+  1709	            const auto x1 = tickToX ((double) (n.start + n.length));
+  1710	            const auto noteWidth = x1 - x0;
+  1711	
+  1712	            if (e.x >= x1 - juce::jmin (touchMarginInside, noteWidth * 0.5) && e.x <= x1 + touchMarginOutside)
+  1713	            {
+  1714	                hit = i;
+  1715	                rightEdge = true;
+  1716	                leftEdge = false;
+  1717	                break;
+  1718	            }
+  1719	        }
+  1720	    }
+  1721	
+  1722	    // Double-tap on an existing note deletes it immediately on touch/click
+  1723	    if (hit >= 0 && e.getNumberOfClicks() == 2 && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods)
+  1724	        && juce::Time::getMillisecondCounter() - createdAt >= 400)
+  1725	    {
+  1726	        setSelection ({});
+  1727	        editNotes ([hit] (Pattern& p) { noteedit::remove (p, { hit }); });
+  1728	        return;
+  1729	    }
+  1730	
+  1731	    // editable ghost notes (Ctrl+Alt+V): a left press on one switches to its channel and grabs the note there
+  1732	    if (hit < 0 && editGhosts && e.mods.isLeftButtonDown() && ! flmods::ctrl (e.mods))
+  1733	        if (const auto ghost = ghostAt (e.x, e.y); ghost >= 0)
+  1734	        {
+  1735	            engine.setSelectedChannel (currentPattern (engine.getSong()).notes[(std::size_t) ghost].channel);
+  1736	            if (noteAt (e.x, e.y, rightEdge, leftEdge) >= 0) // now it is one of this channel's notes
+  1737	                mouseDown (e);
+  1738	            return;
+  1739	        }
+  1740	
+  1741	    // Zoom tool: right-click zooms out around the point (a click zooms in, a drag zooms to the range)
+  1742	    if (tool == EditTool::zoom && e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+  1743	    {
+  1744	        zoomOut (e.x);
+  1745	        return;
+  1746	    }
+  1747	
+  1748	    // every tool: right click deletes (double right-click on a ghost note switches to its channel; with
+  1749	    // editable ghost notes a right-click deletes the ghost note itself)
+  1750	    if (e.mods.isRightButtonDown())
+  1751	    {
+  1752	        if (hit < 0 && editGhosts)
+  1753	            if (const auto ghost = ghostAt (e.x, e.y); ghost >= 0)
+  1754	            {
+  1755	                setSelection ({});
+  1756	                editNotes ([ghost] (Pattern& p) { noteedit::remove (p, { ghost }); });
+  1757	                return;
+  1758	            }
+  1759	
+  1760	        if (hit < 0 && e.getNumberOfClicks() >= 2)
+  1761	            if (const auto ghost = ghostAt (e.x, e.y); ghost >= 0)
+  1762	            {
+  1763	                engine.setSelectedChannel (currentPattern (engine.getSong()).notes[(std::size_t) ghost].channel);
+  1764	                return;
+  1765	            }
+  1766	
+  1767	        drag = Drag::erase;
+  1768	        startedOnEmpty = hit < 0;
+  1769	        setSelection ({}); // indices change while deleting
+  1770	
+  1771	        if (hit >= 0)
+  1772	        {
+  1773	            erasedSomething = true;
+  1774	            editNotes ([hit] (Pattern& p) { noteedit::remove (p, { hit }); });
+  1775	        }
+  1776	        return;
+  1777	    }
+  1778	
+  1779	    // every tool: Ctrl+click on a note adds/removes it from the selection; Ctrl+drag selects (Shift adds)
+  1780	    if (hit >= 0 && flmods::ctrl (e.mods))
+  1781	    {
+  1782	        auto s = selection;
+  1783	
+  1784	        if (isSelected (hit))
+  1785	            s.erase (std::find (s.begin(), s.end(), hit));
+  1786	        else
+  1787	            s.push_back (hit);
+  1788	
+  1789	        setSelection (s);
+  1790	        return;
+  1791	    }
+  1792	
+  1793	    if ((hit < 0 && flmods::ctrl (e.mods)) || tool == EditTool::lasso
+  1794	        || (hit < 0 && e.mods.isShiftDown() && tool != EditTool::brush && tool != EditTool::drumPaint))
+  1795	    {
+  1796	        drag = Drag::select;
+  1797	        dragNote = hit; // a click without dragging selects this note (Lasso)
+  1798	        selectionBefore = e.mods.isShiftDown() ? selection : std::vector<int> {};
+  1799	        rubberBand = {};
+  1800	        setSelection (selectionBefore);
+  1801	        return;
+  1802	    }
+  1803	
+  1804	    const auto snapOn = ! e.mods.isAltDown();
+  1805	
+  1806	    switch (tool)
+  1807	    {
+  1808	        case EditTool::eraser:
+  1809	            drag = Drag::erase;
+  1810	            setSelection ({});
+  1811	            if (hit >= 0)
+  1812	                editNotes ([hit] (Pattern& p) { noteedit::remove (p, { hit }); });
+  1813	            return;
+  1814	
+  1815	        case EditTool::mute:
+  1816	            drag = Drag::muting;
+  1817	            touchedNotes.clear();
+  1818	            if (hit >= 0)
+  1819	            {
+  1820	                muteTarget = ! currentPattern (engine.getSong()).notes[(std::size_t) hit].muted;
+  1821	                touchedNotes.push_back (hit);
+  1822	                editNotes ([hit, m = muteTarget] (Pattern& p) { p.notes[(std::size_t) hit].muted = m; });
+  1823	            }
+  1824	            else
+  1825	                muteTarget = true;
+  1826	            return;
+  1827	
+  1828	        case EditTool::knife:
+  1829	            drag = Drag::knife;
+  1830	            knifeFrom = knifeTo = e.getPosition();
+  1831	            repaint();
+  1832	            return;
+  1833	
+  1834	        case EditTool::zoom:
+  1835	            drag = Drag::zoomRange;
+  1836	            rubberBand = {};
+  1837	            return;
+  1838	
+  1839	        case EditTool::listen:
+  1840	            drag = Drag::listen;
+  1841	            listenAt (e.x);
+  1842	            return;
+  1843	
+  1844	        case EditTool::pencil:
+  1845	        case EditTool::brush:
+  1846	        case EditTool::drumPaint:
+  1847	        case EditTool::lasso:
+  1848	        case EditTool::slip:
+  1849	            break;
+  1850	    }
+  1851	
+  1852	    // Pencil (and Brush on an existing note): Shift+drag on a note drags a copy
+  1853	    if (hit >= 0 && e.mods.isShiftDown() && ! rightEdge && ! leftEdge)
+  1854	    {
+  1855	        const auto sources = isSelected (hit) ? selection : notetools::groupOf (currentPattern (engine.getSong()), hit);
+  1856	        const auto grabbedAt = (std::size_t) (std::find (sources.begin(), sources.end(), hit) - sources.begin());
+  1857	        std::vector<int> added;
+  1858	
+  1859	        // the copy comes out in the same order as the originals (copy sorts by start)
+  1860	        std::vector<Note> ordered;
+  1861	        for (auto i : sources)
+  1862	            ordered.push_back (currentPattern (engine.getSong()).notes[(std::size_t) i]);
+  1863	
+  1864	        editNotes ([&] (Pattern& p) {
+  1865	            added = noteedit::paste (p, ordered, 0);
+  1866	            notetools::regroup (p, added);
+  1867	        });
+  1868	        setSelection (added);
+  1869	        dragIndices = added;
+  1870	        dragOriginals = ordered;
+  1871	        lastScaleDragKeys = -1000;
+  1872	        dragNote = added[grabbedAt];
+  1873	        drag = Drag::move;
+  1874	        grabOffset = ordered[grabbedAt].start - snap (xToTick (e.x), snapOn);
+  1875	        previewOn (ordered[grabbedAt].key, ordered[grabbedAt].velocity);
+  1876	        return;
+  1877	    }
+  1878	
+  1879	    if (hit >= 0)
+  1880	    {
+  1881	        if (! isSelected (hit)) // a grouped note brings its group along (FL's note groups)
+  1882	        {
+  1883	            const auto members = notetools::groupOf (currentPattern (engine.getSong()), hit);
+  1884	            setSelection (members.size() > 1 ? members : std::vector<int> {});
+  1885	        }
+  1886	
+  1887	        const auto& notes = currentPattern (engine.getSong()).notes;
+  1888	        const auto& n = notes[(std::size_t) hit];
+  1889	        dragNote = hit;
+  1890	        dragIndices = selection.empty() ? std::vector<int> { hit } : selection;
+  4170	
+  4171	    // (the tools and the other single letters are key map actions now: runKeyAction, issue #12)
+  4172	    return false;
+  4173	}
+  4174	
+  4175	bool PianoRollComponent::runKeyAction (const std::string& id)
+  4176	{
+  4177	    for (const auto& t : editTools())
+  4178	        if (t.tool != EditTool::slip && t.tool != EditTool::brush && t.tool != EditTool::drumPaint
+  4179	            && id == "pianoRoll.tool." + std::string (editToolId (t.tool)))
+  4180	        {
+  4181	            tools.setTool (t.tool);
+  4182	            return true;
+  4183	        }
+  4184	
+  4185	    if (id == "pianoRoll.slide") slideButton.setToggleState (! slideButton.getToggleState(), juce::dontSendNotification);
+  4186	    else if (id == "pianoRoll.previousChannel") stepChannel (-1, false);
+  4187	    else if (id == "pianoRoll.nextChannel") stepChannel (1, false);
+  4188	    else if (id == "pianoRoll.previousChannelWithNotes") stepChannel (-1, true);
+  4189	    else if (id == "pianoRoll.nextChannelWithNotes") stepChannel (1, true);
+  4190	    else return false;
+  4191	    return true;
+  4192	}
+  4193	
+  4194	void PianoRollComponent::refreshToolKeys (const std::function<juce::String (const std::string&)>& keyOf)
+  4195	{
+  4196	    tools.refreshKeys ([&keyOf] (EditTool t) { return keyOf ("pianoRoll.tool." + std::string (editToolId (t))); });
+  4197	}
+  4198	
+  4199	juce::PopupMenu PianoRollComponent::midiMenu()
+  4200	{
+  4201	    juce::PopupMenu menu;
+  4202	    menu.addItem (tr ("Import .mid into this channel...") + keyText ("pianoRoll.importMidi"), [this] { runAction ("pianoRoll.importMidi"); });
+  4203	    menu.addItem (tr ("Export pattern as .mid...") + keyText ("pianoRoll.exportMidi"), [this] { runAction ("pianoRoll.exportMidi"); });
+  4204	    return menu;
+  4205	}
+  4206	
+  4207	void PianoRollComponent::importMidi (const midiimport::ParsedMidi& midi, const juce::String& name)
+  4208	{
+  4209	    // FL's "Import MIDI data" window with Blend (REA round 146b): which tracks / channels / controller
+  4210	    static midiimport::Options remembered = [] {
+=== Shortcut & Tool grep ===
+src/core/KeyMap.cpp:228:        { "pianoRoll.tool.pencil", TR_NOOP ("Tool: Pencil"), Context::pianoRoll, { chord ('P') } },
+src/core/KeyMap.cpp:229:        { "pianoRoll.tool.brush", TR_NOOP ("Tool: Brush"), Context::pianoRoll, { chord ('B') } },
+src/core/KeyMap.cpp:230:        { "pianoRoll.tool.drumPaint", TR_NOOP ("Tool: Drum brush"), Context::pianoRoll, { chord ('N') } },
+src/core/KeyMap.cpp:231:        { "pianoRoll.tool.eraser", TR_NOOP ("Tool: Eraser"), Context::pianoRoll, { chord ('D') } },
+src/core/KeyMap.cpp:232:        { "pianoRoll.tool.mute", TR_NOOP ("Tool: Mute"), Context::pianoRoll, { chord ('T') } },
+src/core/KeyMap.cpp:233:        { "pianoRoll.tool.knife", TR_NOOP ("Tool: Knife"), Context::pianoRoll, { chord ('C') } },
+src/core/KeyMap.cpp:234:        { "pianoRoll.tool.lasso", TR_NOOP ("Tool: Lasso (select)"), Context::pianoRoll, { chord ('E') } },
+src/core/KeyMap.cpp:235:        { "pianoRoll.tool.zoom", TR_NOOP ("Tool: Zoom"), Context::pianoRoll, { chord ('Z') } },
+src/core/KeyMap.cpp:236:        { "pianoRoll.tool.listen", TR_NOOP ("Tool: Listen"), Context::pianoRoll, { chord ('Y') } },
+src/core/KeyMap.cpp:276:        { "playlist.tool.pencil", TR_NOOP ("Tool: Pencil"), Context::playlist, { chord ('P') } },
+src/core/KeyMap.cpp:277:        { "playlist.tool.brush", TR_NOOP ("Tool: Brush"), Context::playlist, { chord ('B') } },
+src/core/KeyMap.cpp:278:        { "playlist.tool.eraser", TR_NOOP ("Tool: Eraser"), Context::playlist, { chord ('D') } },
+src/core/KeyMap.cpp:279:        { "playlist.tool.mute", TR_NOOP ("Tool: Mute"), Context::playlist, { chord ('T') } },
+src/core/KeyMap.cpp:280:        { "playlist.tool.knife", TR_NOOP ("Tool: Knife"), Context::playlist, { chord ('C') } },
+src/core/KeyMap.cpp:281:        { "playlist.tool.lasso", TR_NOOP ("Tool: Lasso (select)"), Context::playlist, { chord ('E') } },
+src/core/KeyMap.cpp:282:        { "playlist.tool.zoom", TR_NOOP ("Tool: Zoom"), Context::playlist, { chord ('Z') } },
+src/core/KeyMap.cpp:283:        { "playlist.tool.listen", TR_NOOP ("Tool: Listen"), Context::playlist, { chord ('Y') } },
+src/core/KeyMap.cpp:284:        { "playlist.tool.slip", TR_NOOP ("Tool: Slip"), Context::playlist, { chord ('S') } },
+src/ui/PlaylistComponent.h:97:    // The key map's actions of this editor (its tools and single letters: "pianoRoll.tool.knife"...); false if not one.
+src/ui/MainComponent.cpp:1586:    if (id.rfind ("playlist.tool.", 0) == 0 && playlist.runKeyAction (id)) return true;
+src/ui/PlaylistComponent.cpp:5616:        if (t.tool != EditTool::drumPaint && id == "playlist.tool." + std::string (editToolId (t.tool)))
+src/ui/PlaylistComponent.cpp:5626:    tools.refreshKeys ([&keyOf] (EditTool t) { return keyOf ("playlist.tool." + std::string (editToolId (t))); });
+src/ui/PianoRollComponent.h:67:    // The key map's actions of this editor (its tools and single letters: "pianoRoll.tool.knife"...); false if not one.
+src/ui/EditorTools.h:45:// The tool's key map name ("pencil", "drumPaint"...): the editors' actions are "pianoRoll.tool.<it>" / "playlist.tool.<it>".
+src/ui/PianoRollComponent.cpp:4179:            && id == "pianoRoll.tool." + std::string (editToolId (t.tool)))
+src/ui/PianoRollComponent.cpp:4196:    tools.refreshKeys ([&keyOf] (EditTool t) { return keyOf ("pianoRoll.tool." + std::string (editToolId (t))); });
+=== ChannelSettings resized slices ===
+  3015	    ~SettingsPanel() override { engine.removeChangeListener (this); }
+  3016	
+  3017	    void resized() override
+  3018	    {
+  3019	        auto area = getLocalBounds().reduced (12);
+  3020	        wave.setBounds (area.removeFromTop (92));
+  3021	        area.removeFromTop (8);
+  3022	        auto place = [] (juce::Rectangle<int> row, std::initializer_list<std::pair<juce::Slider*, juce::Label*>> items) {
+  3023	            const auto w = row.getWidth() / 3;
+  3024	
+  3025	            for (auto [slider, label] : items)
+  3026	            {
+  3027	                auto column = row.removeFromLeft (w);
+  3028	                label->setBounds (column.removeFromTop (18));
+  3029	                slider->setBounds (column);
+  3030	            }
+  3031	        };
+  3032	
+  3033	        auto top = area.removeFromTop (110);
+  3034	        {
+  3035	            // Gain, Pitch, Stretch and the keep-pitch switch (a third of the width: its text is long)
+  3036	            const auto w4 = top.getWidth() * 2 / 9;
+  3037	            for (auto [slider, label] : { std::pair { &gain, &gainLabel }, { &pitch, &pitchLabel }, { &stretch, &stretchLabel } })
+  3038	            {
+  3039	                auto column = top.removeFromLeft (w4);
+  3040	                label->setBounds (column.removeFromTop (18));
+  3041	                slider->setBounds (column);
+  3042	            }
+  3043	            auto column = top.withSizeKeepingCentre (juce::jmin (top.getWidth(), 140), juce::jmin (top.getHeight(), 64));
+  3044	            keepPitch.setBounds (column.removeFromTop (column.getHeight() / 2));
+  3045	            stretchMethod.setBounds (column.withSizeKeepingCentre (column.getWidth(), juce::jmin (column.getHeight(), 24)));
+  3046	        }
+  3047	        area.removeFromTop (6);
+  3048	        auto envelope = area.removeFromTop (110);
+  3049	        const auto w = envelope.getWidth() / 4;
+  3050	
+  3051	        for (auto [slider, label] : { std::pair { &attack, &attackLabel }, { &decay, &decayLabel }, { &sustain, &sustainLabel }, { &release, &releaseLabel } })
+  3052	        {
+  3053	            auto column = envelope.removeFromLeft (w);
+  3054	            label->setBounds (column.removeFromTop (18));
+  3055	            slider->setBounds (column);
+  3056	        }
+  3057	
+  3058	        area.removeFromTop (8);
+  3059	        area.removeFromTop (6);
+  3060	        place (area.removeFromTop (110), { { &regionStart, &regionStartLabel }, { &regionEnd, &regionEndLabel } });
+  3061	        area.removeFromTop (6);
+  3062	        {
+  3063	            auto filterRow = area.removeFromTop (110);
+  3064	            filterType.setBounds (filterRow.removeFromRight (filterRow.getWidth() / 3).withSizeKeepingCentre (124, 24));
+  3065	            place (filterRow.withWidth (filterRow.getWidth() * 3 / 2), { { &cutoff, &cutoffLabel }, { &resonance, &resonanceLabel } });
+  3066	        }
+  3067	        {
+  3068	            auto buttons = area.removeFromBottom (26);
+  3069	            const auto half = buttons.getWidth() / 2;
+  3070	            modulationButton.setBounds (buttons.removeFromLeft (half).reduced (4, 0));
+  3071	            precomputeButton.setBounds (buttons.reduced (4, 0));
+  3072	        }
+  3073	        area.removeFromTop (6);
+  3074	        reverse.setBounds (area.removeFromLeft (150).removeFromTop (24));
+  3075	        cut.setBounds (area.removeFromLeft (130).removeFromTop (24));
+  3076	        porta.setBounds (area.removeFromLeft (100).removeFromTop (24));
+  3077	    }
+  3078	
+  3079	    int getChannel() const noexcept { return ref.index; }
+  3080	
+  3081	    // A sample dropped on the waveform (from the Browser or the system) replaces the channel's sample (issue #12)
+  3082	    bool isInterestedInDragSource (const SourceDetails& details) override
+  3083	    {
+  3084	        return BrowserComponent::isBrowserDrag (details) && SampleLibrary::isSampleFile (BrowserComponent::draggedFile (details));
+  3085	    }
+  3086	    void itemDragEnter (const SourceDetails&) override { setDropHighlight (true); }
+  3087	    void itemDragExit (const SourceDetails&) override { setDropHighlight (false); }
+  3088	    void itemDropped (const SourceDetails& details) override
+  3089	    {
+  3090	        setDropHighlight (false);
+  3091	        replaceSample (BrowserComponent::draggedFile (details));
+  3092	    }
+  3093	    bool isInterestedInFileDrag (const juce::StringArray& files) override
+  3094	    {
+  3095	        return files.size() == 1 && SampleLibrary::isSampleFile (juce::File (files[0]));
+  3096	    }
+  3097	    void fileDragEnter (const juce::StringArray&, int, int) override { setDropHighlight (true); }
+  3098	    void fileDragExit (const juce::StringArray&) override { setDropHighlight (false); }
+  3099	    void filesDropped (const juce::StringArray& files, int, int) override
+  3100	    {
+  3101	        setDropHighlight (false);
+  3102	        replaceSample (juce::File (files[0]));
+  3103	    }
+  3104	    void paintOverChildren (juce::Graphics& g) override
+  3105	    {
+  3106	        if (dropHighlight)
+  3107	        {
+  3108	            g.setColour (theme::colour::accent);
+  3109	            g.drawRect (wave.getBounds().expanded (2), 2);
+  3110	        }
+  3111	    }
+  3112	
+  3113	private:
+  3114	    void setDropHighlight (bool on)
+  3115	    {
+  3680	            return;
+  3681	
+  3682	        updating = true;
+  3683	        const auto& s = c->synth;
+  3684	
+  3685	        for (std::size_t o = 0; o < 3; ++o)
+  3686	        {
+  3687	            rows[o].wave.setSelectedId ((int) s.osc[o].wave + 1, juce::dontSendNotification);
+  3688	            rows[o].octave.setValue (s.osc[o].octave, juce::dontSendNotification);
+  3689	            rows[o].detune.setValue (s.osc[o].detune, juce::dontSendNotification);
+  3690	            rows[o].semitones.setValue (s.osc[o].semitones, juce::dontSendNotification);
+  3691	            rows[o].pan.setValue (s.osc[o].pan, juce::dontSendNotification);
+  3692	            rows[o].level.setValue (s.osc[o].level, juce::dontSendNotification);
+  3693	        }
+  3694	
+  3695	        attack.setValue (s.attack, juce::dontSendNotification);
+  3696	        decay.setValue (s.decay, juce::dontSendNotification);
+  3697	        sustain.setValue (s.sustain, juce::dontSendNotification);
+  3698	        release.setValue (s.release, juce::dontSendNotification);
+  3699	        cutoff.setValue (s.cutoff, juce::dontSendNotification);
+  3700	        resonance.setValue (s.resonance, juce::dontSendNotification);
+  3701	        mono.setToggleState (s.mono, juce::dontSendNotification);
+  3702	        am.setToggleState (s.am, juce::dontSendNotification);
+  3703	        porta.setValue (s.portaBeats, juce::dontSendNotification);
+  3704	        portaOn.setToggleState (s.porta, juce::dontSendNotification);
+  3705	        filterTypeBox.setSelectedId (s.filterType + 1, juce::dontSendNotification);
+  3706	        fm.setValue (s.fm, juce::dontSendNotification);
+  3707	        fmDecay.setValue (s.fmDecay, juce::dontSendNotification);
+  3708	        keyTrack.setValue (s.keyTrack, juce::dontSendNotification);
+  3709	        sweep.setValue (s.sweep, juce::dontSendNotification);
+  3710	        sweepTime.setValue (s.sweepTime, juce::dontSendNotification);
+  3711	        bandLow.setValue (s.bandGain[0], juce::dontSendNotification);
+  3712	        bandMid.setValue (s.bandGain[1], juce::dontSendNotification);
+  3713	        bandHigh.setValue (s.bandGain[2], juce::dontSendNotification);
+  3714	        ring.setToggleState (s.ring, juce::dontSendNotification);
+  3715	
+  3716	        updating = false;
+  3717	
+  3718	        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>())
+  3719	            w->setName (tr ("Synth settings - {0}", { juce::String::fromUTF8 (c->name.c_str()) }));
+  3720	    }
+  3721	
+  3722	    void apply()
+  3723	    {
+  3724	        if (updating || current() == nullptr)
+  3725	            return;
+  3726	
+  3727	        auto s = current()->synth; // keeps what this window does not show (envelopes and LFOs)
+  3728	
+  3729	        for (std::size_t o = 0; o < 3; ++o)
+  3730	            s.osc[o] = { (Waveform) juce::jlimit (0, 5, rows[o].wave.getSelectedId() - 1), (int) rows[o].octave.getValue(),
+  3731	                         (float) rows[o].detune.getValue(), (float) rows[o].level.getValue(), (int) rows[o].semitones.getValue(),
+  3732	                         (float) rows[o].pan.getValue() };
+  3733	
+  3734	        s.attack = (float) attack.getValue();
+  3735	        s.decay = (float) decay.getValue();
+  3736	        s.sustain = (float) sustain.getValue();
+  3737	        s.release = (float) release.getValue();
+  3738	        s.cutoff = (float) cutoff.getValue();
+  3739	        s.resonance = (float) resonance.getValue();
+  3740	        s.mono = mono.getToggleState();
+  3741	        s.am = am.getToggleState();
+  3742	        s.portaBeats = (float) porta.getValue();
+  3743	        s.porta = portaOn.getToggleState();
+  3744	        s.filterType = juce::jlimit (0, 3, filterTypeBox.getSelectedId() - 1);
+  3745	        s.fm = (float) fm.getValue();
+  3746	        s.fmDecay = (float) fmDecay.getValue();
+  3747	        if (s.fmDecay <= 0.0f)
+  3748	            s.fmSustain = 1.0f;
+  3749	        s.keyTrack = (float) keyTrack.getValue();
+  3750	        s.sweep = (float) sweep.getValue();
+  3751	        s.sweepTime = (float) sweepTime.getValue();
+  3752	        s.bandGain = { (float) bandLow.getValue(), (float) bandMid.getValue(), (float) bandHigh.getValue() };
+  3753	        s.ring = ring.getToggleState();
+  3754	
+  3755	        if (s == current()->synth)
+  3756	            return;
+  3757	
+  3758	        ref.edit (engine, [s] (ChannelDef& channelDef) { channelDef.synth = s; });
+  3759	    }
+  3760	
+  3761	    void changeListenerCallback (juce::ChangeBroadcaster*) override
+  3762	    {
+  3763	        if (current() == nullptr)
+  3764	        {
+  3765	            if (auto* w = findParentComponentOfClass<juce::DocumentWindow>())
+  3766	                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::DocumentWindow> (w)] {
+  3767	                    if (safe != nullptr)
+  3768	                        safe->closeButtonPressed();
+  3769	                });
+  3770	            return;
+  3771	        }
+  3772	
+  3773	        refresh();
+  3774	    }
+  3775	
+  4595	            fatMode.setBounds (toggles.removeFromLeft (100));
+  4596	        }
+  4597	        area.removeFromTop (6);
+  4598	        {
+  4599	            auto rootRow = section (area.removeFromTop (74), tr ("Root note"));
+  4600	            rootSection = (int) sections.size() - 1;
+  4601	            const auto resetWidth = theme::buttonWidth (rootReset, 50, 96); // long "Reset" translations
+  4602	            auto toggles = rootRow.removeFromLeft (100 + resetWidth);
+  4603	            mainPitch.setBounds (toggles.removeFromTop (22));
+  4604	            auto line = toggles.removeFromTop (22);
+  4605	            rootReset.setBounds (line.removeFromRight (resetWidth).reduced (0, 1));
+  4606	            addToKey.setBounds (line);
+  4607	            auto fine = rootRow.removeFromLeft (58);
+  4608	            row (fine, { fineTune });
+  4609	            rootKeys.setBounds (rootRow.reduced (4, 2));
+  4610	        }
+  4611	    }
+  4612	
+  4613	private:
+  4614	    // LYNX's chord choices for the arpeggiator (the piano roll's chord stamps)
+  4615	    static const std::vector<std::pair<const char*, std::vector<int>>>& arpChords()
+  4616	    {
+  4617	        static const std::vector<std::pair<const char*, std::vector<int>>> chords {
+  4618	            { TR_NOOP ("Major"), { 0, 4, 7 } }, { TR_NOOP ("Minor"), { 0, 3, 7 } }, { "Dim", { 0, 3, 6 } }, { "Aug", { 0, 4, 8 } },
+  4619	            { "Sus2", { 0, 2, 7 } }, { "Sus4", { 0, 5, 7 } }, { "7", { 0, 4, 7, 10 } }, { "Maj7", { 0, 4, 7, 11 } },
+  4620	            { "m7", { 0, 3, 7, 10 } }, { "m9", { 0, 3, 7, 10, 14 } }, { TR_NOOP ("Octave"), { 0, 12 } },
+  4621	        };
+  4622	        return chords;
+  4623	    }
+  4624	
+  4625	    static const std::vector<std::pair<const char*, float>>& arpSpeeds()
+  4626	    {
+  4627	        static const std::vector<std::pair<const char*, float>> speeds { { "1/4", 1.0f },  { "1/8", 0.5f },
+  4628	                                                                         { TR_NOOP ("1/8 triplet"), 1.0f / 3.0f }, { "1/16", 0.25f },
+  4629	                                                                         { TR_NOOP ("1/16 triplet"), 1.0f / 6.0f }, { "1/32", 0.125f } };
+  4630	        return speeds;
+  4631	    }
+  4632	
+  4633	    const ChannelDef* current() const
+  4634	    {
+  4635	        const auto& channels = engine.getSong().channels;
+  4636	        return channel >= 0 && channel < (int) channels.size() ? &channels[(std::size_t) channel] : nullptr;
+  4637	    }
+  4638	
+  4639	    void edit (std::function<void (ChannelDef&)> change)
+  4640	    {
+  4641	        if (updating || current() == nullptr)
+  4642	            return;
+  4643	        engine.editSong ([ch = channel, change] (Song& s) {
+  4644	            if (ch < (int) s.channels.size())
+  4645	                change (s.channels[(std::size_t) ch]);
+=== PatcherEditor 2160-2315 ===
+  2160	            auto editor = node.effect.kind == EffectKind::controlSurface
+  2161	                              ? makeControlSurfaceEditor (engine, slot, std::nullopt)
+  2162	                              : makeXyControllerEditor (engine, slot,
+  2163	                                                        [effect = graph != nullptr ? graph->effectAt (n) : nullptr] (int k) {
+  2164	                                                            return effect != nullptr ? effect->controlOutput (k) : 0.0f;
+  2165	                                                        },
+  2166	                                                        std::nullopt);
+  2167	            openToolWindow (std::move (editor), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2168	            return;
+  2169	        }
+  2170	        const auto extra = FlExtraWindows::handles (node.effect.kind); // Big Clock / Tuner / HTML NoteBook (round 165g)
+  2171	        if (! node.generator && (VisualWindows::handles (node.effect.kind) || extra)) // Wave Candy / Visualizer in a Patcher (round 164c)
+  2172	        {
+  2173	            VisualTarget vt;
+  2174	            vt.engine = &engine;
+  2175	            vt.locate = [t = target, n] (Song& song) -> EffectSlot* {
+  2176	                auto* doc = t.doc (song);
+  2177	                return doc != nullptr && n < (int) doc->nodes.size() && ! doc->nodes[(std::size_t) n].generator
+  2178	                               && (VisualWindows::handles (doc->nodes[(std::size_t) n].effect.kind)
+  2179	                                   || FlExtraWindows::handles (doc->nodes[(std::size_t) n].effect.kind))
+  2180	                           ? &doc->nodes[(std::size_t) n].effect
+  2181	                           : nullptr;
+  2182	            };
+  2183	            auto graphIn = [t = target] (AudioEngine& e) -> patcher::Graph* {
+  2184	                return t.channel ? patcher::graphOf (e.getChannelInstrument (t.index).get()) : patcher::graphOf (e.getEffect (t.index, t.slot).get());
+  2185	            };
+  2186	            vt.runningIn = [graphIn, n] (AudioEngine& e) -> std::shared_ptr<Effect> {
+  2187	                auto* g = graphIn (e);
+  2188	                return g != nullptr ? g->effectAt (n) : nullptr;
+  2189	            };
+  2190	            vt.running = [runningIn = vt.runningIn, &e = engine] { return runningIn (e); };
+  2191	            if (extra)
+  2192	                FlExtraWindows::openNode (vt, title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2193	            else
+  2194	                VisualWindows::openNode (vt, title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2195	            return;
+  2196	        }
+  2197	        if (! node.generator && node.effect.kind == EffectKind::hardwareInsert) // round 165c: the editor it has in a mixer slot
+  2198	        {
+  2199	            openToolWindow (makeNodeEffectEditor (
+  2200	                                engine,
+  2201	                                [t = target, n] (Song& song) -> EffectSlot* {
+  2202	                                    auto* doc = t.doc (song);
+  2203	                                    return doc != nullptr && n < (int) doc->nodes.size() && ! doc->nodes[(std::size_t) n].generator
+  2204	                                                   && doc->nodes[(std::size_t) n].effect.kind == EffectKind::hardwareInsert
+  2205	                                               ? &doc->nodes[(std::size_t) n].effect
+  2206	                                               : nullptr;
+  2207	                                },
+  2208	                                [&e = engine, t = target, n]() -> std::shared_ptr<Effect> {
+  2209	                                    auto* g = t.channel ? patcher::graphOf (e.getChannelInstrument (t.index).get()) : patcher::graphOf (e.getEffect (t.index, t.slot).get());
+  2210	                                    return g != nullptr && n < g->nodeCount() ? g->effectAt (n) : nullptr;
+  2211	                                },
+  2212	                                title + " (" + tr ("Patcher") + ")"),
+  2213	                            title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2214	            return;
+  2215	        }
+  2216	        if (! node.generator && node.effect.kind != EffectKind::plugin && node.effect.kind != EffectKind::patcher)
+  2217	        {
+  2218	            openToolWindow (std::make_unique<NodeParams> (engine, target, n), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2219	            return;
+  2220	        }
+  2221	        // a MIDI Out / Envelope Controller node: its own editor on the node's settings (round 162)
+  2222	        auto locate = [t = target, n] (Song& song) -> ChannelDef* {
+  2223	            auto* doc = t.doc (song);
+  2224	            return doc != nullptr && n < (int) doc->nodes.size() && doc->nodes[(std::size_t) n].generator ? &doc->nodes[(std::size_t) n].channel : nullptr;
+  2225	        };
+  2226	        if (node.generator && node.channel.instrument == InstrumentKind::dashboard) // round 164
+  2227	        {
+  2228	            openToolWindow (makeDashboardEditor (engine, locate), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2229	            return;
+  2230	        }
+  2231	        if (node.generator && node.channel.instrument == InstrumentKind::voltage) // round 164
+  2232	        {
+  2233	            openToolWindow (makeVoltageControllerEditor (engine, locate), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2234	            return;
+  2235	        }
+  2236	        if (node.generator && node.channel.instrument == InstrumentKind::videoplayer) // round 165g
+  2237	        {
+  2238	            openToolWindow (makeVideoPlayerEditor (engine, locate, -1), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2239	            return;
+  2240	        }
+  2241	        if (node.generator && node.channel.instrument == InstrumentKind::wavetraveller) // round 167f
+  2242	        {
+  2243	            openToolWindow (makeWaveTravellerEditor (engine, locate, -1), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2244	            return;
+  2245	        }
+  2246	        if (node.generator && node.channel.instrument == InstrumentKind::midiOut)
+  2247	        {
+  2248	            openToolWindow (makeMidiOutEditor (engine, locate), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2249	            return;
+  2250	        }
+  2251	        if (node.generator && node.channel.instrument == InstrumentKind::vfx)
+  2252	        {
+  2253	            auto running = [&e = engine, t = target, n]() -> std::shared_ptr<Instrument> { // (round 165c: what it plays)
+  2254	                const auto keep = t.channel ? std::shared_ptr<void> (e.getChannelInstrument (t.index)) : std::shared_ptr<void> (e.getEffect (t.index, t.slot));
+  2255	                auto* g = t.channel ? patcher::graphOf (std::static_pointer_cast<Instrument> (keep).get())
+  2256	                                    : patcher::graphOf (std::static_pointer_cast<Effect> (keep).get());
+  2257	                return g != nullptr && n < g->nodeCount() ? g->instrumentAt (n) : nullptr;
+  2258	            };
+  2259	            openToolWindow (makeVfxEditor (engine, locate, -1, running), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2260	            return;
+  2261	        }
+  2262	        if (node.generator && node.channel.instrument == InstrumentKind::controller && parseKeyboardController (node.channel.controllerState)) // round 165c
+  2263	        {
+  2264	            openToolWindow (makeKeyboardControllerEditor (engine, locate,
+  2265	                                                          [out = nodeOutput (n)] { return out (0); }),
+  2266	                            title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2267	            return;
+  2268	        }
+  2269	        if (node.generator && node.channel.instrument == InstrumentKind::layer) // round 165c: its children = the nodes on its Children pin
+  2270	        {
+  2271	            openToolWindow (makeLayerEditor (engine, locate,
+  2272	                                             [t = target, n] (Song& song) {
+  2273	                                                 std::vector<ChannelDef*> kids;
+  2274	                                                 if (auto* doc = t.doc (song))
+  2275	                                                     for (const auto k : patcher::layerChildren (*doc, n))
+  2276	                                                         kids.push_back (&doc->nodes[(std::size_t) k].channel);
+  2277	                                                 return kids;
+  2278	                                             }),
+  2279	                            title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2280	            return;
+  2281	        }
+  2282	        if (node.generator && node.channel.instrument == InstrumentKind::soundfont) // round 165c
+  2283	        {
+  2284	            openToolWindow (makeSoundFontEditor (engine, locate), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2285	            return;
+  2286	        }
+  2287	        if (node.generator && node.channel.instrument == InstrumentKind::controller && ! parseKeyboardController (node.channel.controllerState))
+  2288	        {
+  2289	            openToolWindow (makeEnvelopeControllerEditor (engine, locate, -1,
+  2290	                                                          nodeOutput (n)), // its running outputs (round 165c)
+  2291	                            title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2292	            return;
+  2293	        }
+  2294	        // a built-in engine (LYNX's synth / sampler, FL's engines): the editor it has on a channel (round 164f)
+  2295	        if (node.generator && hasNodeEditor (node.channel))
+  2296	            if (auto frame = makeNodeChannelFrame (engine, locate))
+  2297	            {
+  2298	                openToolWindow (std::move (frame), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+  2299	                return;
+  2300	            }
+  2301	        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, tr ("Patcher"),
+  2302	                                                node.effect.kind == EffectKind::plugin || node.channel.instrument == InstrumentKind::plugin
+  2303	                                                    ? tr ("This plugin could not be loaded (it is not installed or has not been scanned).")
+  2304	                                                    : tr ("This node has no editor of its own here."));
+  2305	    }
+  2306	
+  2307	    void fit()
+  2308	    {
+  2309	        const auto* d = currentDoc();
+  2310	        if (d == nullptr)
+  2311	            return;
+  2312	        auto box = nodeBounds (*d, patchFromHost).getUnion (nodeBounds (*d, patchToHost));
+  2313	        for (int n = 0; n < (int) d->nodes.size(); ++n)
+  2314	            box = box.getUnion (nodeBounds (*d, n));
+  2315	        box = box.expanded (40.0f);
+=== Remaining vector editors setSize & resized ===
+--- src/ui/ControllerEditors.cpp ---
+166-        compile (false);
+167-        engine.addChangeListener (this);
+168-        startTimerHz (30);
+169:        setSize (600, 330);
+170-    }
+171-
+172-    ~FormulaEditor() override { engine.removeChangeListener (this); }
+--
+973-        engine.addChangeListener (this);
+974-        refresh();
+975-        startTimerHz (30);
+976:        setSize (760, 520);
+977-    }
+978-
+979-    ~EnvelopeControllerEditor() override { engine.removeChangeListener (this); }
+--
+1466-        ramp.onClick = [this] { edit ([] (KeyboardControllerData& d) { for (std::size_t k = 0; k < d.keys.size(); ++k) d.keys[k] = (float) std::min (1.0, (double) k / 127.0); }); };
+1467-        invert.onClick = [this] { edit ([] (KeyboardControllerData& d) { for (auto& v : d.keys) v = 1.0f - v; }); };
+1468-        flat.onClick = [this] { edit ([] (KeyboardControllerData& d) { d.keys.fill (0.0f); }); };
+1469:        setSize (760, 300);
+1470-        refresh();
+1471-        startTimerHz (20);
+1472-    }
+195:    void resized() override
+196-    {
+197-        auto area = getLocalBounds().reduced (14).withTrimmedTop (24);
+198-        auto top = area.removeFromTop (92);
+199-        for (auto& k : knobs)
+200-            k->setBounds (top.removeFromLeft (72));
+201-        top.removeFromLeft (10);
+202-        monitor.setBounds (top);
+203-        area.removeFromTop (10);
+204-        auto row = area.removeFromTop (28);
+205-        examples.setBounds (row.removeFromRight (90));
+206-        row.removeFromRight (6);
+207-        compileButton.setBounds (row.removeFromRight (80));
+208-        row.removeFromRight (6);
+209-        formula.setBounds (row);
+210-        area.removeFromTop (4);
+211-        status.setBounds (area.removeFromTop (20));
+212-        area.removeFromTop (4);
+213-        help.setBounds (area);
+214-    }
+215-
+216-private:
+217-    EffectSlot* find (Song& song) const
+218-    {
+219-        if (track < 0 || track >= (int) song.mixer.size() || slot < 0 || slot >= (int) song.mixer[(std::size_t) track].effects.size())
+220-            return nullptr;
+221-        auto& fx = song.mixer[(std::size_t) track].effects[(std::size_t) slot];
+222-        return fx.kind == EffectKind::formulaController ? &fx : nullptr;
+223-    }
+224-
+225-    void setStatus (const juce::String& text, juce::Colour colour)
+226-    {
+227-        status.setText (text, juce::dontSendNotification);
+228-        status.setColour (juce::Label::textColourId, colour);
+229-    }
+230-
+--
+1003:    void resized() override
+1004-    {
+1005-        auto area = getLocalBounds().reduced (14).withTrimmedTop (26);
+1006-        auto top = area.removeFromTop (96);
+1007-        // X/Y pad with its knobs (FL: left of the outputs)
+1008-        auto padArea = top.removeFromLeft (96);
+1009-        pad.setBounds (padArea.reduced (2));
+1010-        auto xy = top.removeFromLeft (52);
+1011-        modX->setBounds (xy.removeFromTop (48));
+1012-        modY->setBounds (xy);
+1013-        top.removeFromLeft (8);
+1014-        // outputs 1–8 in two rows of four (as FL)
+1015-        auto outs = top.removeFromLeft (4 * 34).withTrimmedBottom (14);
+1016-        for (int k = 0; k < 8; ++k)
+1017-            tabs[(std::size_t) k].setBounds (outs.getX() + (k % 4) * 34, outs.getY() + (k / 4) * 42, 32, 30);
+1018-        top.removeFromLeft (10);
+1019-        auto knobs = top.removeFromLeft (3 * 58);
+1020-        base->setBounds (knobs.removeFromLeft (58));
+1021-        envAmount->setBounds (knobs.removeFromLeft (58));
+1022-        lfoAmount->setBounds (knobs.removeFromLeft (58));
+1023-        top.removeFromLeft (10);
+1024-        auto right = top;
+1025-        bipolar.setBounds (right.removeFromTop (24));
+1026-        continuous.setBounds (right.removeFromTop (24));
+1027-        right.removeFromTop (6);
+1028-        part.setBounds (right.removeFromTop (26).withWidth (juce::jmin (right.getWidth(), 220)));
+1029-
+1030-        area.removeFromTop (6);
+1031-        keys.setBounds (area.removeFromTop (30));
+1032-        area.removeFromTop (6);
+1033-
+1034-        auto bottom = area.removeFromBottom (78);
+1035-        auto side = area.removeFromRight (170);
+1036-        graph.setBounds (area);
+1037-        side.removeFromLeft (12);
+1038-        keysLabel.setBounds (side.removeFromTop (18));
+--
+1201:        resized();
+1202-    }
+1203-
+1204-    void select (int k)
+1205-    {
+1206-        shown = k;
+1207-        refresh();
+1208-    }
+1209-
+1210-    void refresh()
+1211-    {
+1212-        const auto d = data();
+1213-        const auto& a = d[(std::size_t) shown];
+1214-        for (int k = 0; k < 8; ++k)
+1215-            tabs[(std::size_t) k].setColour (juce::TextButton::buttonColourId, k == shown ? theme::colour::accentMuted : theme::colour::bg4);
+1216-        const auto envelopePage = shownPart == 0, lfoPage = shownPart == 1, mapPage = shownPart >= 2;
+1217-        enabled.setButtonText (lfoPage ? tr ("LFO on") : tr ("Envelope on"));
+1218-        enabled.setToggleState (lfoPage ? a.lfoOn : a.envOn, juce::dontSendNotification);
+1219-        enabled.setVisible (! mapPage);
+1220-        tempo.setToggleState (lfoPage ? a.lfoTempo : a.tempo, juce::dontSendNotification);
+1221-        tempo.setVisible (! mapPage);
+1222-        global.setToggleState (a.lfoGlobal, juce::dontSendNotification);
+1223-        global.setVisible (lfoPage);
+1224-        resetMap.setVisible (mapPage);
+1225-        for (auto& k : adsr)
+1226-            k->setVisible (envelopePage);
+1227-        lfoSpeed->setVisible (lfoPage);
+1228-        for (auto& k : lfoShape)
+1229-            k->setVisible (lfoPage);
+1230-        bipolar.setToggleState (a.bipolar, juce::dontSendNotification);
+1231-        continuous.setToggleState (d.continuous, juce::dontSendNotification);
+1232-        lowKey.setValue (juce::jlimit (0, 127, a.lowKey), juce::dontSendNotification);
+1233-        highKey.setValue (juce::jlimit (0, 127, a.highKey), juce::dontSendNotification);
+1234-        graph.tempo = lfoPage ? a.lfoTempo : a.tempo;
+1235-        graph.neutral = mapPage ? neutralOf (a) : -1.0f;
+1236-        graph.showPreview = lfoPage;
+--
+1476:    void resized() override
+1477-    {
+1478-        auto r = getLocalBounds().reduced (10);
+1479-        title.setBounds (r.removeFromTop (22));
+1480-        r.removeFromTop (4);
+1481-        auto bottom = r.removeFromBottom (64);
+1482-        values.setBounds (r);
+1483-        bottom.removeFromTop (6);
+1484-        noteOff.setBounds (bottom.removeFromLeft (70));
+1485-        bottom.removeFromLeft (8);
+1486-        autoRelease.setBounds (bottom.removeFromLeft (130).withSizeKeepingCentre (130, 24));
+1487-        for (auto* b : { &flat, &invert, &ramp })
+1488-        {
+1489-            b->setBounds (bottom.removeFromRight (80).withSizeKeepingCentre (76, 26));
+1490-            bottom.removeFromRight (6);
+1491-        }
+1492-    }
+1493-
+1494-private:
+1495-    std::optional<KeyboardControllerData> current() const
+1496-    {
+1497-        const auto* c = locate (const_cast<Song&> (engine.getSong()));
+1498-        return c != nullptr && c->instrument == InstrumentKind::controller ? parseKeyboardController (c->controllerState) : std::nullopt;
+1499-    }
+1500-
+1501-    void edit (std::function<void (KeyboardControllerData&)> change)
+1502-    {
+1503-        engine.editSong ([l = locate, change = std::move (change)] (Song& s) {
+1504-            auto* c = l (s);
+1505-            if (c == nullptr || c->instrument != InstrumentKind::controller)
+1506-                return;
+1507-            auto d = parseKeyboardController (c->controllerState);
+1508-            if (! d)
+1509-                return;
+1510-            change (*d);
+1511-            writeKeyboardController (*d, c->controllerState);
+--- src/ui/Controllers164.cpp ---
+89-        engine.addChangeListener (this);
+90-        timerCallback(); // (the outputs before the first tick)
+91-        startTimerHz (30);
+92:        setSize (axes == 3 ? 640 : 600, 380);
+93-    }
+94-
+95-    ~XyEditor() override { engine.removeChangeListener (this); }
+--
+374-            addChildComponent (*bar);
+375-        }
+376-        const auto extent = contentExtent();
+377:        setSize (juce::jlimit (560, 1400, (int) std::ceil (extent.x)), juce::jlimit (380, 900, top + (int) std::ceil (extent.y)));
+378-    }
+379-
+380-    ~SurfacePanel() override { engine.removeChangeListener (this); }
+185:    void resized() override
+186-    {
+187-        auto right = getLocalBounds().reduced (14).withTrimmedTop (32).withTrimmedLeft (padArea().getWidth() + (axes == 3 ? 44 : 14));
+188-        auto tabs = right.removeFromTop (26);
+189-        if (axes == 3)
+190-            curveBox.setBounds (tabs.removeFromRight (juce::jmin (150, tabs.getWidth() - 130)).reduced (0, 2));
+191-        for (int a = 0; a < axes; ++a)
+192-            axisButtons[(std::size_t) a].setBounds (tabs.removeFromLeft (40).reduced (2, 0));
+193-        right.removeFromTop (8);
+194-        auto row = right.removeFromTop (72);
+195-        const auto knobWidth = juce::jmin (62, row.getWidth() / 4);
+196-        for (int a = 0; a < axes; ++a)
+197-        {
+198-            auto r = row;
+199-            for (auto& k : axisKnobs[(std::size_t) a])
+200-                k->setBounds (r.removeFromLeft (knobWidth));
+201-        }
+202-        right.removeFromTop (curveArea().getHeight() + 30);
+203-        auto bottom = right.removeFromTop (72);
+204-        speedKnob->setBounds (bottom.removeFromLeft (62));
+205-        accelKnob->setBounds (bottom.removeFromLeft (62));
+206-    }
+207-
+208-    void mouseDown (const juce::MouseEvent& e) override
+209-    {
+210-        draggingZ = axes == 3 && zArea().contains (e.getPosition());
+211-        mouseDrag (e);
+212-    }
+213-
+214-    void mouseDrag (const juce::MouseEvent& e) override
+215-    {
+216-        if (draggingZ)
+217-        {
+218-            const auto strip = zArea().toFloat();
+219-            set (xy::level (2), juce::jlimit (0.0f, 1.0f, (strip.getBottom() - 6.0f - e.position.y) / (strip.getHeight() - 12.0f)));
+220-            return;
+--
+480:    void resized() override
+481-    {
+482-        auto bar = getLocalBounds().removeFromTop (top).reduced (8, 5);
+483-        addButton.setBounds (bar.removeFromRight (30));
+484-        bar.removeFromRight (6);
+485-        editButton.setBounds (bar.removeFromRight (60));
+486-        if (midi.get)
+487-        {
+488-            bar.removeFromRight (6);
+489-            midiButton.setBounds (bar.removeFromRight (56));
+490-        }
+491-        updateScrollBars();
+492-    }
+493-
+494-    void mouseDown (const juce::MouseEvent& e) override
+495-    {
+496-        const auto* controls = locate (engine.getSong());
+497-        if (controls == nullptr || e.position.y < (float) top)
+498-            return;
+499-        const auto i = controlAt (e.position);
+500-        if (e.mods.isPopupMenu())
+501-        {
+502-            if (i >= 0)
+503-                showControlMenu (i);
+504-            else
+505-                showAddMenu (e.position + scroll, nullptr);
+506-            return;
+507-        }
+508-        if (i < 0)
+509-            return;
+510-        dragging = i;
+511-        const auto& c = (*controls)[(std::size_t) i];
+512-        grab = { c.value, c.valueY };
+513-        moving = editButton.getToggleState();
+514-        grabAt = moving ? e.position + scroll - juce::Point<float> (c.x, c.y + (float) top) : e.position;
+515-        if (moving)
+--- src/ui/DanceView.cpp ---
+603-        for (auto* c : std::initializer_list<juce::Component*> { &moveBox, &mirrored, &shown, &size, &speed, &colour, &place })
+604-            addAndMakeVisible (c);
+605-        load();
+606:        setSize (660, 340);
+607-        startTimerHz (30);
+608-    }
+609-
+641:    void resized() override
+642-    {
+643-        auto area = getLocalBounds().reduced (12);
+644-        stage = area.removeFromLeft (230);
+645-        area.removeFromLeft (14);
+646-        header = area.removeFromTop (22);
+647-        area.removeFromTop (34);
+648-        auto row = [&area] (int h = 26) { auto r = area.removeFromTop (h); area.removeFromTop (6); return r; };
+649-        {
+650-            auto r = row();
+651-            moveLabel = r.removeFromLeft (60);
+652-            moveBox.setBounds (r.removeFromLeft (180));
+653-        }
+654-        {
+655-            auto r = row();
+656-            sizeLabel = r.removeFromLeft (60);
+657-            size.setBounds (r);
+658-        }
+659-        {
+660-            auto r = row();
+661-            speedLabel = r.removeFromLeft (60);
+662-            speed.setBounds (r);
+663-        }
+664-        {
+665-            auto r = row();
+666-            shown.setBounds (r.removeFromLeft (170));
+667-            mirrored.setBounds (r.removeFromLeft (140));
+668-        }
+669-        {
+670-            auto r = row();
+671-            colour.setBounds (r.removeFromLeft (150));
+672-            r.removeFromLeft (8);
+673-            place.setBounds (r.removeFromLeft (170));
+674-        }
+675-        keysArea = area;
+676-    }
+--- src/ui/LayerEditor.cpp ---
+148-
+149-        engine.addChangeListener (this);
+150-        refresh();
+151:        setSize (600, 360);
+152-    }
+153-
+154-    ~LayerEditor() override { engine.removeChangeListener (this); }
+219:    void resized() override
+220-    {
+221-        auto controls = getLocalBounds().reduced (14).withTrimmedTop (32);
+222-        controls = controls.removeFromLeft (180);
+223-        if (channel < 0)
+224-        {
+225-            nodeHint.setBounds (controls.removeFromTop (34));
+226-            controls.removeFromTop (4);
+227-        }
+228-        for (auto* b : { &setChildren, &showChildren, &menuButton })
+229-            if (b->isVisible())
+230-            {
+231-                b->setBounds (controls.removeFromTop (28));
+232-                controls.removeFromTop (6);
+233-            }
+234-        controls.removeFromTop (4);
+235-        // the three modes on the left, the crossfade's Fade knob beside them (clear of the key map below)
+236-        auto modes = controls.removeFromTop (78);
+237-        fade->setBounds (modes.removeFromRight (66).withSizeKeepingCentre (66, 70));
+238-        for (auto* t : { &random, &sequential, &crossfade })
+239-        {
+240-            t->setBounds (modes.removeFromTop (24));
+241-            modes.removeFromTop (2);
+242-        }
+243-        if (levelKnob != nullptr)
+244-        {
+245-            controls.removeFromTop (6);
+246-            auto knobs = controls.removeFromTop (64);
+247-            for (auto* k : { levelKnob.get(), panKnob.get(), pitchKnob.get() })
+248-                k->setBounds (knobs.removeFromLeft (60).withSizeKeepingCentre (58, 64));
+249-        }
+250-    }
+251-
+252-    void mouseMove (const juce::MouseEvent& e) override
+253-    {
+254-        hoverPoint = e.getPosition();
+--- src/ui/MidiOutEditor.cpp ---
+162-        for (auto* b : { &copy, &paste, &reset, &ok })
+163-            addAndMakeVisible (*b);
+164-        show (control);
+165:        setSize (dialogWidth, dialogHeight);
+166-    }
+167-
+168-    // Round 167p: every number field has the same size (its - / + buttons too), the window is as tall as its rows
+--
+365-
+366-        engine.addChangeListener (this);
+367-        refresh();
+368:        setSize (editorWidth, editorHeight);
+369-    }
+370-
+371-    ~MidiOutEditor() override { engine.removeChangeListener (this); }
+--
+669-                    return;
+670-                const auto extra = safe->getHeight() - safe->getContentComponentBorder().getTopAndBottom() - ControlSettings::dialogHeight;
+671-                if (extra > 0)
+672:                    safe->setSize (safe->getWidth(), safe->getHeight() - extra);
+673-            });
+674-        }
+675-    }
+181:    void resized() override
+182-    {
+183-        auto area = getLocalBounds().reduced (padding);
+184-        auto row = [&] (juce::Label& l) {
+185-            auto r = area.removeFromTop (rowHeight);
+186-            area.removeFromTop (rowGap);
+187-            l.setBounds (r.removeFromLeft (labelWidth));
+188-            return r;
+189-        };
+190-        type.setBounds (row (typeLabel));
+191-        fullName.setBounds (row (fullLabel));
+192-        shortName.setBounds (row (shortLabel));
+193-        number.setBounds (row (numberLabel).removeFromLeft (numberWidth));
+194-        auto range = row (rangeLabel);
+195-        minimum.setBounds (range.removeFromLeft (numberWidth));
+196-        rangeDash = range.removeFromLeft (24);
+197-        maximum.setBounds (range.removeFromLeft (numberWidth));
+198-        channel.setBounds (row (channelLabel).removeFromLeft (numberWidth));
+199-        noteOff.setBounds (row (noteOffLabel).removeFromLeft (numberWidth));
+200-        area.removeFromTop (8);
+201-        auto buttons = area.removeFromTop (28);
+202-        const auto w = buttons.getWidth() / 4;
+203-        for (auto* b : { &copy, &paste, &reset, &ok })
+204-            b->setBounds (buttons.removeFromLeft (w).reduced (3, 0));
+205-    }
+206-
+207-private:
+208-    void show (const Control& c)
+209-    {
+210-        type.setSelectedId ((int) c.type + 1, juce::dontSendNotification);
+211-        fullName.setText (utf (c.name), false);
+212-        shortName.setText (utf (c.shortName), false);
+213-        updateRanges();
+214-        number.setValue (juce::jmax (0, c.number), juce::dontSendNotification);
+215-        minimum.setValue (c.min, juce::dontSendNotification);
+216-        maximum.setValue (c.max, juce::dontSendNotification);
+--
+386:    void resized() override
+387-    {
+388-        auto area = getLocalBounds().reduced (margin);
+389-
+390-        auto top = area.removeFromTop (44);
+391-        auto column = [&] (juce::Label& l, int w, std::initializer_list<juce::Component*> cs) {
+392-            auto c = top.removeFromLeft (w);
+393-            l.setBounds (c.removeFromTop (18));
+394-            c = c.withSizeKeepingCentre (c.getWidth(), 24);
+395-            const auto each = c.getWidth() / (int) cs.size();
+396-            for (auto* x : cs)
+397-                x->setBounds (c.removeFromLeft (each).reduced (cs.size() > 1 ? 2 : 0, 0));
+398-            top.removeFromLeft (10);
+399-            return l.getBounds().getUnion (c);
+400-        };
+401-        const auto channelColumn = column (channelLabel, 64, { &midiChannel });
+402-        const auto patchWidth = juce::jmax (180, top.getWidth() - 236 - 10 - 120 - 10);
+403-        const auto patchColumn = column (patchLabel, patchWidth, { &patch });
+404-        column (bankLabel, 236, { &bankMsb, &bankLsb });
+405-        column (portLabel, top.getWidth(), { &port });
+406-        area.removeFromTop (rowGap);
+407-
+408-        // the page selector under Channel / Patch; Presets and Options on the right (room for the preset arrows that
+409-        // every plugin window header gets, right of Presets)
+410-        auto pageRow = area.removeFromTop (26);
+411-        pageLabel.setBounds (channelColumn.getX(), pageRow.getY(), channelColumn.getWidth(), pageRow.getHeight());
+412-        page.setBounds (patchColumn.getX(), pageRow.getY(), patchColumn.getWidth(), pageRow.getHeight());
+413-        rename.setBounds (juce::Rectangle<int> (page.getRight() + 6, pageRow.getY(), 24, pageRow.getHeight()).reduced (3));
+414-        pageRow.removeFromRight (56);
+415-        presets.setBounds (pageRow.removeFromRight (90));
+416-        pageRow.removeFromRight (6);
+417-        options.setBounds (pageRow.removeFromRight (90));
+418-        area.removeFromTop (rowGap);
+419-
+420-        knobArea = area.removeFromTop (8 + 3 * knobRowHeight + 8);
+421-        auto grid = knobArea.reduced (24, 8);
+--- src/ui/VfxEditors.cpp ---
+2695-        outputsTop = y + 8;
+2696-        if (info != nullptr && ! info->outputs.empty())
+2697-            y = outputsTop + 26 + (int) info->outputs.size() * 18;
+2698:        controls.setSize (width, std::max (y + 10, controlsView.getHeight()));
+2699-        repaint();
+2700-        controls.repaint();
+2701-    }
+--
+3055-
+3056-        engine.addChangeListener (this);
+3057-        refresh();
+3058:        setSize (std::max (620, body->preferredWidth()), 44 + (channel >= 0 ? 34 : 0) + body->preferredHeight());
+3059-    }
+3060-
+3061-    ~VfxEditor() override { engine.removeChangeListener (this); }
+222:    void resized() override
+223-    {
+224-        auto top = getLocalBounds().reduced (8, 4).removeFromTop (60);
+225-        enable.setBounds (top.removeFromLeft (90).withSizeKeepingCentre (90, 24));
+226-        top.removeFromLeft (8);
+227-        offset.setBounds (top.removeFromLeft (64));
+228-        baseKey.setBounds (top.removeFromLeft (64));
+229-        slide.setBounds (top.removeFromLeft (64));
+230-        top.removeFromLeft (16);
+231-        auto mm = top.removeFromLeft (200);
+232-        multimodeLabel.setBounds (mm.removeFromTop (22));
+233-        multimode.setBounds (mm.removeFromTop (24));
+234-    }
+235-
+236-    void paint (juce::Graphics& g) override
+237-    {
+238-        const auto grid = gridArea();
+239-        g.setColour (theme::colour::bg0);
+240-        g.fillRect (grid);
+241-        const auto cw = grid.getWidth() / (float) columns, rh = grid.getHeight() / 12.0f;
+242-        // output columns: the octaves and the black keys, labelled every C
+243-        for (int c = 0; c < columns; ++c)
+244-        {
+245-            const auto value = lowest + c;
+246-            const auto pc = ((value % 12) + 12) % 12;
+247-            const auto black = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
+248-            const juce::Rectangle<float> col (grid.getX() + (float) c * cw, grid.getY(), cw, grid.getHeight());
+249-            if (value >= 0 && value < 12) // the row's own octave, brighter (as FL draws it)
+250-            {
+251-                g.setColour (theme::colour::bg2);
+252-                g.fillRect (col);
+253-            }
+254-            if (black)
+255-            {
+256-                g.setColour (theme::colour::bg0.withAlpha (0.55f));
+257-                g.fillRect (col);
+--
+446:    void resized() override
+447-    {
+448-        auto area = getLocalBounds().reduced (10, 4).withTrimmedTop (24);
+449-        const auto half = area.getWidth() / 2;
+450-        for (int c = 0; c < 16; ++c)
+451-        {
+452-            auto column = c < 8 ? area.withWidth (half - 10) : area.withTrimmedLeft (half + 10);
+453-            auto row = column.withHeight (26).translated (0, (c % 8) * 28);
+454-            row.removeFromLeft (70);
+455-            ports[(std::size_t) c].setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2));
+456-            row.removeFromLeft (8);
+457-            colours[(std::size_t) c].setBounds (row);
+458-        }
+459-    }
+460-
+461-    void paint (juce::Graphics& g) override
+462-    {
+463-        auto area = getLocalBounds().reduced (10, 4);
+464-        const auto half = area.getWidth() / 2;
+465-        g.setFont (theme::font (theme::type::caption));
+466-        g.setColour (theme::colour::textSecondary);
+467-        for (const auto x : { area.getX(), area.getX() + half + 10 })
+468-        {
+469-            const auto w = half - 10 - 70;
+470-            g.drawText (theme::caps (tr ("Note colour")), x, area.getY(), 70, 18, juce::Justification::centredLeft);
+471-            g.drawText (theme::caps (tr ("Voice output")), x + 70, area.getY(), (w - 8) / 2, 18, juce::Justification::centredLeft);
+472-            g.drawText (theme::caps (tr ("Colour")), x + 70 + (w - 8) / 2 + 8, area.getY(), (w - 8) / 2, 18, juce::Justification::centredLeft);
+473-        }
+474-        area.removeFromTop (24);
+475-        for (int c = 0; c < 16; ++c)
+476-        {
+477-            auto column = c < 8 ? area.withWidth (half - 10) : area.withTrimmedLeft (half + 10);
+478-            auto row = column.withHeight (26).translated (0, (c % 8) * 28).removeFromLeft (64).toFloat();
+479-            g.setColour (theme::noteGroupHue (c));
+480-            g.fillRoundedRectangle (row.removeFromLeft (26.0f).reduced (3.0f), 3.0f);
+481-            g.setColour (theme::colour::textPrimary);
+--
+563:    void resized() override
+564-    {
+565-        auto area = getLocalBounds().reduced (12, 6);
+566-        auto top = area.removeFromTop (28);
+567-        for (auto& b : tabs)
+568-            b.setBounds (top.removeFromLeft (92).reduced (2, 0));
+569-        area.removeFromTop (8);
+570-        auto left = area.removeFromLeft (230);
+571-        auto row1 = left.removeFromTop (92);
+572-        for (auto* k : { &center, &multiply, &offset })
+573-            k->setBounds (row1.removeFromLeft (76));
+574-        auto row2 = left.removeFromTop (92);
+575-        for (auto* k : { &tension, &humanize })
+576-            k->setBounds (row2.removeFromLeft (76));
+577-        auto side = row2.reduced (2, 14);
+578-        mode.setBounds (side.removeFromTop (26));
+579-        left.removeFromTop (8);
+580-        auto bottom = left.removeFromTop (92);
+581-        reset.setBounds (bottom.removeFromLeft (100).withSizeKeepingCentre (100, 26));
+582-        bottom.removeFromLeft (10);
+583-        persistence.setBounds (bottom.removeFromLeft (76));
+584-        graph = area.reduced (10, 0).toFloat();
+585-    }
+586-
+587-    void paint (juce::Graphics& g) override
+588-    {
+589-        if (graph.isEmpty())
+590-            return;
+591-        const auto tab = settings.selectedTab;
+592-        const auto bipolar = tab >= L::finePitch;
+593-        const auto lo = bipolar ? -1.0 : 0.0, hi = 1.0;
+594-        g.setColour (theme::colour::bg0);
+595-        g.fillRoundedRectangle (graph, 4.0f);
+596-        g.setColour (theme::colour::border);
+597-        for (int k = 1; k < 8; ++k)
+598-        {
+--
+1113:    void resized() override
+1114-    {
+1115-        auto area = getLocalBounds().reduced (12, 6);
+1116-        auto bottom = area.removeFromBottom (32);
+1117-        manual.setBounds (bottom.removeFromRight (150).reduced (0, 2));
+1118-        bottom.removeFromRight (10);
+1119-        mappingHint.setBounds (bottom);
+1120-        area.removeFromBottom (6);
+1121-        auto top = area.removeFromTop (30);
+1122-        for (auto& b : zoneButtons)
+1123-            b.setBounds (top.removeFromLeft (30).reduced (1, 0));
+1124-        top.removeFromLeft (12);
+1125-        name.setBounds (top.removeFromLeft (150).reduced (0, 2));
+1126-        top.removeFromLeft (12);
+1127-        for (auto& b : pages)
+1128-            b.setBounds (top.removeFromLeft (84).reduced (1, 0));
+1129-        area.removeFromTop (6);
+1130-        auto row = area.removeFromTop (64);
+1131-        transpose.setBounds (row.removeFromLeft (70));
+1132-        row.removeFromLeft (10);
+1133-        flag.setBounds (row.removeFromLeft (220).withSizeKeepingCentre (220, 24));
+1134-        clear.setBounds (row.removeFromRight (90).withSizeKeepingCentre (90, 26));
+1135-        row.removeFromRight (6);
+1136-        whole.setBounds (row.removeFromRight (130).withSizeKeepingCentre (130, 26));
+1137-        area.removeFromTop (6);
+1138-        editor.setBounds (area);
+1139-    }
+1140-
+1141-private:
+1142-    void setMapping (bool on)
+1143-    {
+1144-        std::shared_ptr<Instrument> keep;
+1145-        if (auto* m = monitor (keep))
+1146-        {
+1147-            m->mapping = on;
+1148-            vfx::Monitor::Item drop[64];
+--
+1400:    void resized() override
+1401-    {
+1402-        auto area = getLocalBounds().reduced (12, 6);
+1403-        auto top = area.removeFromTop (30);
+1404-        for (auto& b : articulatorButtons)
+1405-            b.setBounds (top.removeFromLeft (28).reduced (1, 0));
+1406-        top.removeFromLeft (14);
+1407-        for (auto& b : targets)
+1408-            b.setBounds (top.removeFromLeft (72).reduced (1, 0));
+1409-        enable.setBounds (top.removeFromRight (90));
+1410-        area.removeFromTop (8);
+1411-        auto row = area.removeFromTop (70);
+1412-        auto left = row.removeFromLeft (130);
+1413-        colour.setBounds (left.removeFromTop (26));
+1414-        for (auto* k : { &low, &high })
+1415-            k->setBounds (row.removeFromLeft (62));
+1416-        row.removeFromLeft (14);
+1417-        for (auto* k : { &base, &envLevel, &lfoLevel })
+1418-            k->setBounds (row.removeFromLeft (62));
+1419-        area.removeFromTop (8);
+1420-        auto parts = area.removeFromTop (28);
+1421-        for (auto& b : partTabs)
+1422-            b.setBounds (parts.removeFromLeft (100).reduced (1, 0));
+1423-        parts.removeFromLeft (14);
+1424-        partOn.setBounds (parts.removeFromLeft (140));
+1425-        tempo.setBounds (parts.removeFromLeft (90));
+1426-        area.removeFromTop (6);
+1427-        auto knobs = area.removeFromBottom (70);
+1428-        for (auto* k : { &attack, &decay, &sustain, &release })
+1429-            k->setBounds (knobs.withWidth (62).translated ((int) (k == &attack ? 0 : k == &decay ? 1 : k == &sustain ? 2 : 3) * 66, 0));
+1430-        for (auto* k : { &speed, &lfoTension, &skew, &pulseWidth })
+1431-            k->setBounds (knobs.withWidth (62).translated ((int) (k == &speed ? 0 : k == &lfoTension ? 1 : k == &skew ? 2 : 3) * 66, 0));
+1432-        area.removeFromBottom (22); // (the help line)
+1433-        editor.setBounds (area);
+1434-    }
+1435-
+--
+1679:    void resized() override
+1680-    {
+1681-        auto area = getLocalBounds().reduced (12, 4);
+1682-        auto right = area.removeFromRight (336);
+1683-        area.removeFromRight (14);
+1684-
+1685-        auto top = area.removeFromTop (28);
+1686-        prevProgram.setBounds (top.removeFromLeft (24));
+1687-        program.setBounds (top.removeFromLeft (250));
+1688-        nextProgram.setBounds (top.removeFromLeft (24));
+1689-        top.removeFromLeft (4);
+1690-        dice.setBounds (top.removeFromLeft (28));
+1691-        top.removeFromLeft (10);
+1692-        latch.setBounds (top.removeFromLeft (70));
+1693-        shiftRight.setBounds (top.removeFromRight (28));
+1694-        shiftLeft.setBounds (top.removeFromRight (28));
+1695-        top.removeFromRight (8);
+1696-        pageLock.setBounds (top.removeFromRight (96));
+1697-        for (int k = 3; k >= 0; --k)
+1698-            pages[(std::size_t) k].setBounds (top.removeFromRight (28).reduced (1, 0));
+1699-        area.removeFromTop (8);
+1700-
+1701-        auto lanes = area.removeFromBottom (layerCount * 24);
+1702-        for (int l = 0; l < layerCount; ++l)
+1703-        {
+1704-            auto row = lanes.removeFromTop (24).reduced (0, 1);
+1705-            auto label = row.removeFromLeft (Grid::labelWidth).withTrimmedRight (4);
+1706-            laneButtons[(std::size_t) l].setBounds (label.removeFromLeft (74));
+1707-            if (l == noteSelect)
+1708-                polyKeys.setBounds (label.reduced (2, 0));
+1709-            if (l == octave)
+1710-                polyOctave.setBounds (label.reduced (2, 0));
+1711-            if (l == gate)
+1712-                gateLaneMode.setBounds (label.reduced (2, 0));
+1713-            rows[(std::size_t) l].setBounds (row);
+1714-        }
+--
+2463:    void resized() override
+2464-    {
+2465-        auto area = getLocalBounds().reduced (10, 6);
+2466-        auto tabRow = area.removeFromTop (26);
+2467-        for (auto* b : tabs)
+2468-        {
+2469-            const auto w = juce::GlyphArrangement::getStringWidthInt (theme::font (theme::type::body), b->getButtonText()) + 26;
+2470-            b->setBounds (tabRow.removeFromLeft (w));
+2471-            tabRow.removeFromLeft (2);
+2472-        }
+2473-        area.removeFromTop (6);
+2474-        controlsView.setBounds (area);
+2475-        layoutControls();
+2476-
+2477-        auto script = area;
+2478-        auto bar = script.removeFromBottom (30).withTrimmedTop (4);
+2479-        apply.setBounds (bar.removeFromLeft (150));
+2480-        bar.removeFromLeft (6);
+2481-        revert.setBounds (bar.removeFromLeft (80));
+2482-        bar.removeFromLeft (6);
+2483-        restart.setBounds (bar.removeFromLeft (80));
+2484-        position.setBounds (bar.removeFromRight (90));
+2485-        bar.removeFromLeft (8);
+2486-        errorButton.setBounds (bar);
+2487-        editor->setBounds (script);
+2488-
+2489-        auto logArea = area;
+2490-        auto logBar = logArea.removeFromBottom (30).withTrimmedTop (4);
+2491-        clearLog.setBounds (logBar.removeFromRight (80));
+2492-        logHint.setBounds (logBar);
+2493-        log.setBounds (logArea);
+2494-        reference.setBounds (area);
+2495-    }
+2496-
+2497-    void paint (juce::Graphics& g) override
+2498-    {
+--
+3078:    void resized() override
+3079-    {
+3080-        auto area = getLocalBounds();
+3081-        auto top = area.removeFromTop (40).reduced (10, 7);
+3082-        next.setBounds (top.removeFromRight (26));
+3083-        presetButton.setBounds (top.removeFromRight (210));
+3084-        prev.setBounds (top.removeFromRight (26));
+3085-        area.removeFromTop (4);
+3086-        if (channel >= 0)
+3087-        {
+3088-            auto row = area.removeFromTop (30).reduced (14, 2);
+3089-            portLabel.setBounds (row.removeFromLeft (90));
+3090-            port.setBounds (row.removeFromLeft (130));
+3091-            row.removeFromLeft (10);
+3092-            connect.setBounds (row.removeFromLeft (170));
+3093-        }
+3094-        body->setBounds (area);
+3095-    }
+3096-
+3097-private:
+3098-    // A VFX Script's editor finds its running instance by the state's tag: a new one when it has none yet or another
+3099-    // VFX in the song has the same (a cloned channel)
+3100-    static void countTags (const ChannelDef& c, std::uint32_t tag, int& n)
+3101-    {
+3102-        if (c.instrument == InstrumentKind::vfx)
+3103-            if (const auto st = vfx::readState (c.pluginState); st && st->tag == tag)
+3104-                ++n;
+3105-        for (const auto& node : c.patcher.nodes)
+3106-            countTags (node.channel, tag, n);
+3107-    }
+3108-
+3109-    void ensureUniqueTag (std::uint32_t tag)
+3110-    {
+3111-        int n = 0;
+3112-        if (tag != 0)
+3113-            for (const auto& c : engine.getSong().channels)
+--- src/ui/VideoPlayerView.cpp ---
+209-        notify();
+210-    }
+211-
+212:    void setSize (int w, int h)
+213-    {
+214-        std::lock_guard<std::mutex> lock (want);
+215-        w = juce::jlimit (16, 1920, w & ~1);
+--
+769-        decoder.startThread (juce::Thread::Priority::low);
+770-        engine.addChangeListener (this);
+771-        reload();
+772:        setSize (600, 420);
+773-        startTimerHz (30);
+774-    }
+775-
+--
+1008-                                               ? (float) juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->scale
+1009-                                               : 1.0f);
+1010-        const auto s = juce::jmin (1.0, scale * dpi);
+1011:        decoder.setSize (juce::roundToInt (info.width * s), juce::roundToInt (info.height * s));
+1012-    }
+1013-
+1014-    // the song position (slaved) or the player's clock that shows video time `t`
+470:    void resized() override
+471-    {
+472-        if (onSize)
+473-            onSize (getLocalBounds());
+474-    }
+475-
+476-    void mouseDoubleClick (const juce::MouseEvent&) override
+477-    {
+478-        if (onDoubleClick)
+479-            onDoubleClick();
+480-    }
+481-};
+482-
+483-// A small icon button (drawn paths, LYNX's style)
+484-class IconButton final : public juce::Button
+485-{
+486-public:
+487-    enum class Icon { load, options, play, pause, stop, loop, sound, mute, detach, start, end };
+488-
+489-    IconButton (Icon i) : juce::Button ({}), icon (i) {}
+490-    Icon icon;
+491-
+492-    void paintButton (juce::Graphics& g, bool over, bool down) override
+493-    {
+494-        auto r = getLocalBounds().toFloat().reduced (1.0f);
+495-        const auto on = getToggleState();
+496-        g.setColour (down ? theme::colour::bg6 : over ? theme::colour::bg5 : theme::colour::bg4);
+497-        g.fillRoundedRectangle (r, 4.0f);
+498-        if (on)
+499-        {
+500-            g.setColour (theme::colour::accent);
+501-            g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.2f);
+502-        }
+503-        g.setColour (on ? theme::colour::accent : theme::colour::textPrimary);
+504-        const auto c = r.getCentre();
+505-        const auto s = juce::jmin (r.getWidth(), r.getHeight()) * 0.30f;
+--
+784:    void resized() override
+785-    {
+786-        auto r = getLocalBounds();
+787-        const auto panelHeight = 98;
+788-        panelArea = r.removeFromBottom (panelHeight);
+789-        // FL's "Dock control panel": the panel below the video; else over the video's bottom
+790-        surface.setBounds (settings.dock ? r : getLocalBounds());
+791-        panelBack.overlay = ! settings.dock;
+792-        panelBack.setBounds (panelArea);
+793-        locateButton.setBounds (r.withSizeKeepingCentre (160, 28).translated (0, 40));
+794-        auto p = panelArea.reduced (8, 6);
+795-        auto row1 = p.removeFromTop (22);
+796-        startLabel.setBounds (row1.removeFromLeft (100));
+797-        endLabel.setBounds (row1.removeFromRight (100));
+798-        rail.setBounds (row1.reduced (4, 0));
+799-        p.removeFromTop (6);
+800-        auto row2 = p.removeFromTop (34);
+801-        const auto b = 30;
+802-        loadButton.setBounds (row2.removeFromLeft (b).withSizeKeepingCentre (b, 28));
+803-        row2.removeFromLeft (4);
+804-        optionsButton.setBounds (row2.removeFromLeft (b).withSizeKeepingCentre (b, 28));
+805-        row2.removeFromLeft (4);
+806-        detachButton.setBounds (row2.removeFromLeft (b).withSizeKeepingCentre (b, 28));
+807-        row2.removeFromLeft (10);
+808-        setStartButton.setBounds (row2.removeFromLeft (b).withSizeKeepingCentre (b, 28));
+809-        row2.removeFromLeft (4);
+810-        setEndButton.setBounds (row2.removeFromLeft (b).withSizeKeepingCentre (b, 28));
+811-        volume->setBounds (row2.removeFromRight (44));
+812-        row2.removeFromRight (4);
+813-        soundButton.setBounds (row2.removeFromRight (b).withSizeKeepingCentre (b, 28));
+814-        row2.removeFromRight (10);
+815-        slaveButton.setBounds (row2.removeFromRight (52).withSizeKeepingCentre (52, 26));
+816-        row2.removeFromRight (6);
+817-        stopButton.setBounds (row2.removeFromRight (b).withSizeKeepingCentre (b, 28));
+818-        row2.removeFromRight (4);
+819-        playButton.setBounds (row2.removeFromRight (b).withSizeKeepingCentre (b, 28));
+--
+919:            resized();
+920-        rail.duration = info.duration;
+921-        rail.start = seconds (settings.start);
+922-        rail.end = settings.end > 0 ? seconds (settings.end) : 0.0;
+923-        startLabel.setText (video::formatTime (seconds (settings.start), settings.timeDisplay, info.fps), juce::dontSendNotification);
+924-        endLabel.setText (video::formatTime (endTime(), settings.timeDisplay, info.fps), juce::dontSendNotification);
+925-        for (auto* b : { &setStartButton, &setEndButton, &loopButton, &playButton, &stopButton })
+926-            b->setEnabled (info.hasVideo);
+927-        repaint();
+928-    }
+929-
+930-    video::Player* player() const
+931-    {
+932-        if (channel < 0)
+933-            return nullptr;
+934-        heldInstrument = engine.getChannelInstrument (channel);
+935-        return video::playerOf (heldInstrument.get());
+936-    }
+937-
+938-    double songSeconds() const
+939-    {
+940-        const auto ticks = engine.getTransport().positionTicks.load();
+941-        const auto& song = engine.getSong();
+942-        if (settings.ignoreTempo)
+943-            return song.secondsForTicks ((std::int64_t) ticks);
+944-        return ticks / (double) ppq * 60.0 / juce::jmax (1.0, song.bpm);
+945-    }
+946-
+947-    void timerCallback() override
+948-    {
+949-        const auto& t = engine.getTransport();
+950-        bool moving = false;
+951-        if (settings.slave)
+952-        {
+953-            nowTime = video::Clock::videoTime (songSeconds(), settings, info.duration);
+954-            moving = t.playing.load();
+--- src/ui/VoltageEditor.cpp ---
+118-        }
+119-        engine.addChangeListener (this);
+120-        refresh();
+121:        setSize (620, rowTop + voltage::outputs * rowHeight + 8);
+122-    }
+123-
+124-    ~VoltageEditor() override { engine.removeChangeListener (this); }
+155:    void resized() override
+156-    {
+157-        auto top = getLocalBounds().reduced (14).withTrimmedTop (30).removeFromTop (60);
+158-        enable.setBounds (top.removeFromLeft (60).withSizeKeepingCentre (60, 26));
+159-        top.removeFromLeft (10);
+160-        range.setBounds (top.removeFromLeft (100).withSizeKeepingCentre (100, 26));
+161-        top.removeFromLeft (8);
+162-        pitch.setBounds (top.removeFromLeft (100).withSizeKeepingCentre (100, 26));
+163-        top.removeFromLeft (8);
+164-        clock.setBounds (top.removeFromLeft (130).withSizeKeepingCentre (130, 26));
+165-        top.removeFromLeft (8);
+166-        pulse->setBounds (top.removeFromLeft (60));
+167-        for (int o = 0; o < voltage::outputs; ++o)
+168-        {
+169-            auto r = juce::Rectangle<int> (96, rowTop + o * rowHeight, getWidth() - 106, rowHeight - 4);
+170-            auto& row = rows[(std::size_t) o];
+171-            row.source.setBounds (r.removeFromLeft (110).withSizeKeepingCentre (110, 22));
+172-            r.removeFromLeft (10);
+173-            row.offset->setBounds (r.removeFromLeft (70));
+174-            row.scale->setBounds (r.removeFromLeft (70));
+175-            r.removeFromLeft (10);
+176-            row.polarity.setBounds (r.removeFromLeft (70).withSizeKeepingCentre (70, 22));
+177-            r.removeFromLeft (10);
+178-            if (o >= 2 && o % 2 == 0)
+179-                tracks[(std::size_t) (o / 2 - 1)].setBounds (r.removeFromLeft (120).withSizeKeepingCentre (120, 22).translated (0, rowHeight / 2));
+180-        }
+181-    }
+182-
+183-private:
+184-    static constexpr int rowTop = 104, rowHeight = 64;
+185-    static constexpr int clockChoices[] = { 2, 4, 8, 12, 16, 24, 32, 48, 64, 96 };
+186-
+187-    struct Row
+188-    {
+189-        juce::ComboBox source;
+190-        std::unique_ptr<ctlui::Knob> offset, scale;
+--- src/ui/WaveTravellerEditor.cpp ---
+461-
+462-        engine.addChangeListener (this);
+463-        reload();
+464:        setSize (760, 470);
+465-    }
+466-
+467-    ~WaveTravellerEditor() override { engine.removeChangeListener (this); }
+478:    void resized() override
+479-    {
+480-        auto r = getLocalBounds().reduced (8);
+481-        auto top = r.removeFromTop (28);
+482-        loadButton.setBounds (top.removeFromLeft (120));
+483-        top.removeFromLeft (6);
+484-        presetButton.setBounds (top.removeFromLeft (90));
+485-        top.removeFromLeft (6);
+486-        keyButton.setBounds (top.removeFromLeft (60));
+487-        top.removeFromLeft (8);
+488-        keyLabel.setBounds (top.removeFromRight (150));
+489-        sampleLabel.setBounds (top);
+490-        r.removeFromTop (6);
+491-        auto knobs = r.removeFromTop (74);
+492-        const auto w = 72;
+493-        mode.setBounds (knobs.removeFromLeft (210).withSizeKeepingCentre (210, 26));
+494-        knobs.removeFromLeft (10);
+495-        for (auto* k : { speedTempo.get(), speedAbs.get(), attack.get(), release.get(), start.get(), end.get() })
+496-            if (k != speedAbs.get())
+497-                k->setBounds (knobs.removeFromLeft (w));
+498-        speedAbs->setBounds (speedTempo->getBounds());
+499-        r.removeFromTop (6);
+500-        keys.setBounds (r.removeFromBottom (44));
+501-        r.removeFromBottom (6);
+502-        auto tabs = r.removeFromTop (24);
+503-        waveButton.setBounds (tabs.removeFromLeft (100));
+504-        tabs.removeFromLeft (4);
+505-        volButton.setBounds (tabs.removeFromLeft (100));
+506-        r.removeFromTop (4);
+507-        curve.setBounds (r);
+508-    }
+509-
+510-    bool isInterestedInFileDrag (const juce::StringArray& files) override
+511-    {
+512-        return files.size() == 1 && juce::File (files[0]).hasFileExtension ("wav;aif;aiff;flac;ogg;mp3");
+513-    }
