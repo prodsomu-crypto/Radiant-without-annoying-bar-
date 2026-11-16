@@ -2405,6 +2405,7 @@ void open (AudioEngine& engine, Target target, const juce::String& title)
     if (window != nullptr)
     {
         window->setResizable (true, false);
+        window->setResizeLimits (240, 180, 3840, 2160);
         window->setResizeLimits (480, 320, 2400, 1600);
     }
 }

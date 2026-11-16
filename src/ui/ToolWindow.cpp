@@ -67,7 +67,8 @@ juce::DocumentWindow* openToolWindow (std::unique_ptr<juce::Component> content, 
     }
     else
     {
-        window->setResizable (false, false);
+        window->setResizable (true, false);
+    window->setResizeLimits (280, 200, 3840, 2160);
     }
 
     if (auto* main = juce::TopLevelWindow::getActiveTopLevelWindow())
