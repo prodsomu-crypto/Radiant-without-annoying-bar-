@@ -86,7 +86,8 @@ Chunks locate (const std::uint8_t* data, std::size_t size, bool needSamples)
         c.error = "not a SoundFont (no RIFF sfbk header)";
         return c;
     }
-    const auto riffEnd = std::min<std::size_t> (size, 8 + (std::size_t) u32 (data + 4));
+    const auto declEnd = 8 + (std::size_t) u32 (data + 4);
+    const auto riffEnd = (declEnd > 12 && declEnd <= size) ? declEnd : size;
     std::size_t pos = 12;
     while (pos + 8 <= riffEnd)
     {
@@ -142,7 +143,7 @@ Chunks locate (const std::uint8_t* data, std::size_t size, bool needSamples)
         pos = body + len + (len & 1);
     }
 
-    const auto records = [] (const Span& s, std::size_t rec) { return s.data != nullptr && s.size % rec == 0 ? s.size / rec : 0; };
+    const auto records = [] (const Span& s, std::size_t rec) { return s.data != nullptr ? s.size / rec : 0; };
     if (records (c.phdr, 38) < 2 || records (c.pbag, 4) < 1 || records (c.pgen, 4) < 1 || records (c.inst, 22) < 2
         || records (c.ibag, 4) < 1 || records (c.igen, 4) < 1 || records (c.shdr, 46) < 2)
     {
@@ -161,7 +162,7 @@ Chunks locate (const std::uint8_t* data, std::size_t size, bool needSamples)
         for (std::size_t i = 0; i < n; ++i)
         {
             const auto idx = (std::size_t) u16 (owners.data + i * rec + at);
-            if (i + 1 == n && idx == 0) return true;
+            if (i + 1 == n) return true;
             if (idx < last || idx > children)
                 return false;
             last = idx;
@@ -319,16 +320,62 @@ std::shared_ptr<const Font> parseFont (const std::vector<std::uint8_t>& bytes, s
                 h.shdrs[i].start = h.shdrs[i].end = h.shdrs[i].startLoop = h.shdrs[i].endLoop = 0;
         float* decoded = nullptr;
         unsigned int count = (unsigned int) c.smpl.size;
-        if (! tsf_decode_sf3_samples (c.smpl.data, &decoded, &count, &h))
+        if (tsf_decode_sf3_samples (c.smpl.data, &decoded, &count, &h))
+        {
+            frames = count;
+            font->samples.resize ((std::size_t) frames + 8, 0);
+            for (std::uint32_t i = 0; i < frames; ++i)
+                font->samples[i] = (std::int16_t) std::lrint (std::clamp (decoded[i], -1.0f, 1.0f) * 32767.0f);
+            std::free (decoded);
+        }
+        else
         {
             std::free (decoded);
-            return fail ("could not decode the SF3 samples");
+            for (int i = 0; i + 1 < h.shdrNum; ++i)
+            {
+                auto& sh = h.shdrs[i];
+                const auto rawStart = sh.start, rawEnd = sh.end;
+                const auto newStart = (std::uint32_t) font->samples.size();
+                if ((sh.sampleType & 0x10) != 0 && rawEnd > rawStart && rawEnd <= c.smpl.size)
+                {
+                    int ch = 0, sr = 0;
+                    short* pcm = nullptr;
+                    const int nframes = stb_vorbis_decode_memory (c.smpl.data + rawStart, (int) (rawEnd - rawStart), &ch, &sr, &pcm);
+                    if (nframes > 0 && pcm != nullptr && ch > 0)
+                    {
+                        for (int f = 0; f < nframes; ++f)
+                            font->samples.push_back (pcm[f * ch]);
+                    }
+                    std::free (pcm);
+                    sh.sampleType &= ~0x30u;
+                }
+                else if ((sh.sampleType & 0x8000u) == 0 && rawEnd > rawStart && (std::size_t) rawEnd * 2 <= c.smpl.size)
+                {
+                    for (std::uint32_t f = rawStart; f < rawEnd; ++f)
+                        font->samples.push_back ((std::int16_t) u16 (c.smpl.data + 2 * (std::size_t) f));
+                }
+                const auto newEnd = (std::uint32_t) font->samples.size();
+                if (newEnd > newStart)
+                {
+                    const auto len = newEnd - newStart;
+                    auto ls = sh.startLoop >= rawStart && sh.startLoop < rawEnd ? sh.startLoop - rawStart : sh.startLoop;
+                    auto le = sh.endLoop > rawStart && sh.endLoop <= rawEnd ? sh.endLoop - rawStart : sh.endLoop;
+                    sh.start = newStart;
+                    sh.end = newEnd;
+                    sh.startLoop = newStart + std::min (ls, len);
+                    sh.endLoop = newStart + std::min (le, len);
+                    font->samples.insert (font->samples.end(), 46, 0);
+                }
+                else
+                {
+                    sh.start = sh.end = sh.startLoop = sh.endLoop = 0;
+                }
+            }
+            frames = (std::uint32_t) font->samples.size();
+            font->samples.resize ((std::size_t) frames + 8, 0);
+            if (frames == 0)
+                return fail ("could not decode the SF3 samples");
         }
-        frames = count;
-        font->samples.resize ((std::size_t) frames + 8, 0);
-        for (std::uint32_t i = 0; i < frames; ++i)
-            font->samples[i] = (std::int16_t) std::lrint (std::clamp (decoded[i], -1.0f, 1.0f) * 32767.0f);
-        std::free (decoded);
     }
 
     tsf parsed;
