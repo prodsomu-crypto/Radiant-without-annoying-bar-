@@ -1042,7 +1042,7 @@ void MainComponent::resized()
         ur.removeFromLeft (2);
         put (redoButton, ur.removeFromLeft (h));
         ur.removeFromLeft (4);
-        put (rackButton, juce::jmin (56, juce::jmax (h, ur.getWidth() / 3)));
+        put (rackButton, ur.removeFromLeft (juce::jmin (56, juce::jmax (h, ur.getWidth() / 3))));
         titleArea = {};
         placeHintBar (ur.withTrimmedLeft (8).withWidth (juce::jmin (900, juce::jmax (0, ur.getWidth() - 8))).reduced (0, 1));
         fixedToolbarArea = bar;
@@ -1058,7 +1058,7 @@ void MainComponent::resized()
         row1Rect.removeFromLeft (2);
         put (redoButton, row1Rect.removeFromLeft (h));
         row1Rect.removeFromLeft (4);
-        put (rackButton, juce::jmin (56, juce::jmax (h, row1Rect.getWidth() / 3)));
+        put (rackButton, row1Rect.removeFromLeft (juce::jmin (56, juce::jmax (h, row1Rect.getWidth() / 3))));
         titleArea = row1Rect.withTrimmedLeft (8).withTrimmedRight (4);
         if (titleArea.getWidth() < 60)
             titleArea = {};
