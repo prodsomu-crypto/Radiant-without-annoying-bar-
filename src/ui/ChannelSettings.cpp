@@ -1410,10 +1410,14 @@ public:
         return juce::jmax (0.4f, juce::jmin ((float) (getWidth() - 16) / (float) layout->width, (float) (getHeight() - layoutTop - 8) / (float) layout->height));
     }
 
+    bool hasDesignedLayout() const noexcept { return layout != nullptr; }
+
     juce::Rectangle<float> layoutRect (const plugui::LayoutItem& item) const
     {
         const auto f = layoutFactor();
-        return { 8.0f + item.x * f, (float) layoutTop + item.y * f, item.w * f, item.h * f };
+        const auto ox = 8.0f + juce::jmax (0.0f, ((float) (getWidth() - 16) - (float) layout->width * f) * 0.5f);
+        const auto oy = (float) layoutTop + juce::jmax (0.0f, ((float) (getHeight() - layoutTop - 8) - (float) layout->height * f) * 0.5f);
+        return { ox + item.x * f, oy + item.y * f, item.w * f, item.h * f };
     }
 
     static float normalised (const juce::Slider& k)
@@ -5059,12 +5063,11 @@ public:
             };
         }
 
-        int width = MiscPanel::preferredWidth, height = MiscPanel::preferredHeight;
-        for (auto& p : pages)
-        {
-            width = juce::jmax (width, p->getWidth());
-            height = juce::jmax (height, p->getHeight());
-        }
+        int width = pages.empty() ? MiscPanel::preferredWidth : pages.front()->getWidth();
+        int height = pages.empty() ? MiscPanel::preferredHeight : pages.front()->getHeight();
+        const auto minHdrW = minimumHeaderWidth();
+        if (width < minHdrW)
+            width = minHdrW;
         refresh();
         engine.addChangeListener (this);
         setSize (width, headerHeight + height);
@@ -5330,6 +5333,8 @@ public:
         // Native instrument pages such as Sakura are intentionally larger than their desktop design canvas. On a
         // tablet with less available height, keep the page reachable inside a screen-fitted scrolling viewport.
         setContentOwned (fitContentToScreen (std::move (content)).release(), true);
+        setResizable (true, false);
+        setResizeLimits (280, 160, 4096, 4096);
 
         centreWithSize (getWidth(), getHeight());
         if (! modulation)

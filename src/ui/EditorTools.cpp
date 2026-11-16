@@ -24,6 +24,7 @@ const std::vector<EditToolInfo>& editTools()
         { EditTool::zoom, Icon::zoom, TR_NOOP ("Zoom"), TR_NOOP ("Click zooms in, drag a range to zoom to it; right-click zooms out"), 'Z' },
         { EditTool::listen, Icon::listen, TR_NOOP ("Listen"), TR_NOOP ("Click or drag to hear what is under the cursor"), 'Y' },
         { EditTool::slip, Icon::slip, TR_NOOP ("Slip"), TR_NOOP ("Drag inside a clip to move its content under it"), 'S' },
+        { EditTool::pan, Icon::pan, TR_NOOP ("Pan"), TR_NOOP ("Drag to pan around the arrangement"), 'H' },
     };
     return list;
 }
@@ -42,6 +43,7 @@ const char* editToolId (EditTool tool)
         case EditTool::zoom: return "zoom";
         case EditTool::listen: return "listen";
         case EditTool::slip: return "slip";
+        case EditTool::pan: return "pan";
     }
     return "pencil";
 }
@@ -97,8 +99,8 @@ ToolStrip::ToolStrip (bool includeSlip)
     for (int group = 0; group < 3; ++group)
     for (const auto& info : editTools())
     {
-        // the Playlist has Slip, the Piano Roll the drum brush
-        if ((info.tool == EditTool::slip && ! includeSlip) || (info.tool == EditTool::drumPaint && includeSlip))
+        // the Playlist has Slip and Pan, the Piano Roll the drum brush
+        if (((info.tool == EditTool::slip || info.tool == EditTool::pan) && ! includeSlip) || (info.tool == EditTool::drumPaint && includeSlip))
             continue;
         if (toolGroup (info.tool) != group) // drawing, changing, looking (round 170e3)
             continue;
@@ -298,6 +300,7 @@ juce::String actionHint (gesture::Action action, bool playlist)
         case A::addPoint: return tr ("Curve: [LMB] or [RMB] adds a point (hold and drag to place it)");
         case A::bendSegment: return tr ("Tension: [LMB] drag up / down bends the segment ([Ctrl] fine)  [RMB] straight");
         case A::openMenu: return tr ("[LMB] clip menu");
+        case A::pan: return tr ("[LMB] drag pans the view");
         case A::none: break;
     }
 

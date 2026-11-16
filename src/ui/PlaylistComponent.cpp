@@ -2544,6 +2544,14 @@ void PlaylistComponent::mouseDown (const juce::MouseEvent& e)
     bool rightEdge = false, leftEdge = false;
     const auto hit = clipAt (e.x, e.y, rightEdge, leftEdge);
     const auto tool = tools.getTool();
+    if (tool == EditTool::pan && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+    {
+        drag = Drag::pan;
+        panStartTicks = scrollTicks;
+        panStartY = scrollY;
+        setMouseCursor (editorCursor (gesture::Cursor::pan));
+        return;
+    }
     if (e.source.isTouch() && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods)) {
         const auto nowMs = juce::Time::getMillisecondCounter();
         if (hit >= 0 && hit == lastTouchTapClip && (nowMs - lastTouchTapMs) < 420 && e.getPosition().getDistanceFrom (lastTouchTapPos) < 28) {
@@ -2806,6 +2814,9 @@ void PlaylistComponent::mouseDown (const juce::MouseEvent& e)
         case EditTool::slip:
             if (hit >= 0)
                 grabClips (Drag::slip);
+            return;
+
+        case EditTool::pan:
             return;
 
         case EditTool::pencil:
@@ -5909,6 +5920,9 @@ void PlaylistComponent::mouseDoubleClick (const juce::MouseEvent& e)
             renameTrack (track);
         return;
     }
+
+    if (tools.getTool() == EditTool::pan && gridArea().contains (e.getPosition()))
+        return;
 
     bool edge = false;
     const auto hit = gridArea().contains (e.getPosition()) ? clipAt (e.x, e.y, edge) : -1;

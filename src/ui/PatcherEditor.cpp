@@ -2164,7 +2164,7 @@ private:
                                                             return effect != nullptr ? effect->controlOutput (k) : 0.0f;
                                                         },
                                                         std::nullopt);
-            openToolWindow (std::move (editor), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n));
+            openToolWindow (std::move (editor), title + " - " + tr ("Patcher"), target.key() + "-node-" + juce::String (n), true);
             return;
         }
         const auto extra = FlExtraWindows::handles (node.effect.kind); // Big Clock / Tuner / HTML NoteBook (round 165g)

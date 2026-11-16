@@ -282,6 +282,7 @@ std::vector<Action> makeActions()
         { "playlist.tool.zoom", TR_NOOP ("Tool: Zoom"), Context::playlist, { chord ('Z') } },
         { "playlist.tool.listen", TR_NOOP ("Tool: Listen"), Context::playlist, { chord ('Y') } },
         { "playlist.tool.slip", TR_NOOP ("Tool: Slip"), Context::playlist, { chord ('S') } },
+        { "playlist.tool.pan", TR_NOOP ("Tool: Pan"), Context::playlist, { chord ('H') } },
         // FL's Performance mode (round 165m; Ctrl+P on FL's Playlist menu [DFM])
         { "playlist.performanceMode", TR_NOOP ("Performance mode on/off (launch the clips before the Start marker)"), Context::playlist, { chord ('P', ctrl) } },
         { "playlist.zoomPerformance", TR_NOOP ("Zoom on the performance clips"), Context::playlist, { chord ('6', shift) }, true },

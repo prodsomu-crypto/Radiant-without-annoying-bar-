@@ -710,6 +710,14 @@ Shape make (Icon icon)
             line (st, 8.5f, 11.5f, 15.5f, 11.5f);
             line (st, 8.5f, 15.5f, 13.5f, 15.5f);
             break;
+        case Icon::pan:
+            line (st, 12.0f, 4.0f, 12.0f, 20.0f);
+            line (st, 4.0f, 12.0f, 20.0f, 12.0f);
+            polyline (st, { { 9.5f, 6.5f }, { 12.0f, 4.0f }, { 14.5f, 6.5f } });
+            polyline (st, { { 9.5f, 17.5f }, { 12.0f, 20.0f }, { 14.5f, 17.5f } });
+            polyline (st, { { 6.5f, 9.5f }, { 4.0f, 12.0f }, { 6.5f, 14.5f } });
+            polyline (st, { { 17.5f, 9.5f }, { 20.0f, 12.0f }, { 17.5f, 14.5f } });
+            break;
     }
 
     return s;

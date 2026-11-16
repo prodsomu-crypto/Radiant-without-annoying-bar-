@@ -52,7 +52,7 @@ public:
 };
 } // namespace
 
-juce::DocumentWindow* openToolWindow (std::unique_ptr<juce::Component> content, const juce::String& title, const juce::String& key)
+juce::DocumentWindow* openToolWindow (std::unique_ptr<juce::Component> content, const juce::String& title, const juce::String& key, bool resizable)
 {
     if (key.isNotEmpty())
         if (auto* old = dynamic_cast<ToolWindow*> (findToolWindow (key)))
@@ -60,7 +60,15 @@ juce::DocumentWindow* openToolWindow (std::unique_ptr<juce::Component> content, 
 
     auto* window = new ToolWindow (title, key);
     window->setContentOwned (fitContentToScreen (std::move (content)).release(), true); // (scrolls when taller than the screen)
-    window->setResizable (false, false);
+    if (resizable)
+    {
+        window->setResizable (true, false);
+        window->setResizeLimits (260, 160, 4096, 4096);
+    }
+    else
+    {
+        window->setResizable (false, false);
+    }
 
     if (auto* main = juce::TopLevelWindow::getActiveTopLevelWindow())
         window->setCentrePosition (main->getScreenBounds().getCentre());

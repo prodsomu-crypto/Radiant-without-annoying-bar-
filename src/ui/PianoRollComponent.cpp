@@ -1846,6 +1846,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
         case EditTool::drumPaint:
         case EditTool::lasso:
         case EditTool::slip:
+        case EditTool::pan:
             break;
     }
 
@@ -4175,7 +4176,7 @@ bool PianoRollComponent::handleKey (const juce::KeyPress& key)
 bool PianoRollComponent::runKeyAction (const std::string& id)
 {
     for (const auto& t : editTools())
-        if (t.tool != EditTool::slip && t.tool != EditTool::brush && t.tool != EditTool::drumPaint
+        if (t.tool != EditTool::slip && t.tool != EditTool::pan && t.tool != EditTool::brush && t.tool != EditTool::drumPaint
             && id == "pianoRoll.tool." + std::string (editToolId (t.tool)))
         {
             tools.setTool (t.tool);

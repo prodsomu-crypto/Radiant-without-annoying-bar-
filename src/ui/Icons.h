@@ -42,9 +42,10 @@ enum class Icon
     stepEdit,   // recording: step edit (steps typed one after another, an arrow to the next; round 170e3)
     punch,      // recording: punch in/out on the loop region (a record dot between two brackets; round 170e3)
     copy,       // Piano Roll: copy notes
-    paste       // Piano Roll: paste notes
+    paste,      // Piano Roll: paste notes
+    pan         // Arrangement: pan tool
 };
-constexpr int iconCount = (int) Icon::paste + 1;
+constexpr int iconCount = (int) Icon::pan + 1;
 
 namespace icons
 {

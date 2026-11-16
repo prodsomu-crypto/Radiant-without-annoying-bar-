@@ -731,10 +731,16 @@ public:
     explicit ScrollingContent (std::unique_ptr<juce::Component> c) : content (c.release())
     {
         setName (content->getName());
+        if (content != nullptr)
+        {
+            naturalWidth = content->getWidth();
+            naturalHeight = content->getHeight();
+        }
         viewport.setViewedComponent (content, true); // (the viewport deletes it)
         viewport.setScrollBarThickness (12);
         addAndMakeVisible (viewport);
-        content->addComponentListener (this);
+        if (content != nullptr)
+            content->addComponentListener (this);
         fit();
     }
 
@@ -744,7 +750,18 @@ public:
             content->removeComponentListener (this);
     }
 
-    void resized() override { viewport.setBounds (getLocalBounds()); }
+    void resized() override
+    {
+        viewport.setBounds (getLocalBounds());
+        if (! inFit && content != nullptr && getWidth() > 0 && getHeight() > 0)
+        {
+            ignoreContentResize = true;
+            const auto targetW = viewport.isHorizontalScrollBarShown() ? juce::jmax (naturalWidth, getWidth()) : getWidth();
+            const auto targetH = viewport.isVerticalScrollBarShown() ? juce::jmax (naturalHeight, getHeight()) : getHeight();
+            content->setSize (targetW, targetH);
+            ignoreContentResize = false;
+        }
+    }
 
     // on the screen: fitted again with the window's real frame, and the window placed so it is all on the screen
     void parentHierarchyChanged() override
@@ -759,26 +776,40 @@ public:
     {
         if (content == nullptr)
             return;
+        inFit = true;
         const auto area = usableScreen();
         auto* window = getTopLevelComponent() != this ? getTopLevelComponent() : nullptr;
         const auto frame = windowFrame (window);
-        const auto f = windowfit::scrollFit (content->getWidth(), content->getHeight(), area.getWidth(), area.getHeight(), frame.getLeftAndRight(),
+        const auto baseW = naturalWidth > 0 ? naturalWidth : content->getWidth();
+        const auto baseH = naturalHeight > 0 ? naturalHeight : content->getHeight();
+        const auto f = windowfit::scrollFit (baseW, baseH, area.getWidth(), area.getHeight(), frame.getLeftAndRight(),
                                              frame.getTopAndBottom(), viewport.getScrollBarThickness());
         viewport.setScrollBarsShown (f.scrollsV, f.scrollsH);
         setSize (f.w, f.h);
         if (window != nullptr && window->isOnDesktop())
             fitWindowOnScreen (*window);
+        inFit = false;
     }
 
 private:
     void componentMovedOrResized (juce::Component&, bool, bool wasResized) override
     {
-        if (wasResized)
+        if (wasResized && ! ignoreContentResize)
+        {
+            if (content != nullptr && ! inFit)
+            {
+                naturalWidth = content->getWidth();
+                naturalHeight = content->getHeight();
+            }
             fit(); // (the window follows its content's size)
+        }
     }
 
     juce::Component::SafePointer<juce::Component> content;
     juce::Viewport viewport;
+    int naturalWidth = 0, naturalHeight = 0;
+    bool inFit = false;
+    bool ignoreContentResize = false;
 };
 } // namespace
 

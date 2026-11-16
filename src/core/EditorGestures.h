@@ -24,7 +24,8 @@ enum class EditTool
     lasso,  // click selects, drag draws a selection box (Shift adds)
     zoom,   // drag a range to zoom into it; a click zooms back out
     listen, // click or drag to hear notes (Piano Roll) or play from there (Playlist)
-    slip    // Playlist only: drag inside a clip to move its content under it
+    slip,   // Playlist only: drag inside a clip to move its content under it
+    pan     // Playlist: single-finger pan
 };
 
 namespace gesture
@@ -123,7 +124,8 @@ enum class Action
     movePoint,    // drags an automation point
     addPoint,     // adds an automation point on the curve
     bendSegment,  // drags an automation segment's tension handle
-    openMenu      // opens the clip menu
+    openMenu,     // opens the clip menu
+    pan           // pans the view
 };
 
 // The action of a left press with `tool` on `target`. `playlist` selects the Playlist's extras
@@ -152,6 +154,7 @@ inline Action leftAction (EditTool tool, Target target, Mods mods, bool playlist
         case EditTool::zoom: return Action::zoomRange;
         case EditTool::listen: return Action::listen;
         case EditTool::slip: return playlist && onItem ? Action::slipContent : Action::none;
+        case EditTool::pan: return Action::pan;
         case EditTool::pencil:
         case EditTool::brush:
         case EditTool::drumPaint:
@@ -237,10 +240,11 @@ inline Cursor cursorFor (Action action, EditTool tool)
         case Action::addPoint:
         case Action::bendSegment:
         case Action::openMenu: return Cursor::point;
+        case Action::pan: return Cursor::pan;
         case Action::none: break;
     }
 
-    return tool == EditTool::slip ? Cursor::slip : Cursor::normal;
+    return tool == EditTool::slip ? Cursor::slip : tool == EditTool::pan ? Cursor::pan : Cursor::normal;
 }
 
 // --- view maths ------------------------------------------------------------------------------------
