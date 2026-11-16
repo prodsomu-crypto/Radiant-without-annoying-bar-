@@ -529,24 +529,23 @@ MainComponent::MainComponent (AudioEngine& e, bool restoreUserSettings)
     rackButton.setWantsKeyboardFocus (false);
     rackButton.setMouseClickGrabsKeyboardFocus (false);
     rackButton.setTooltip (tr ("Show or hide the bottom Effect Device Rack"));
-    rackButton.onClick = [this] {
-        deviceRackOpen = ! deviceRackOpen;
-        deviceRack.setVisible (deviceRackOpen);
-        rackButton.setToggleState (deviceRackOpen, juce::dontSendNotification);
-        resized();
-    };
+    rackButton.onClick = [this] { setDeviceRackOpen (! deviceRackOpen); };
     addAndMakeVisible (rackButton);
-    deviceRack.onClose = [this] {
-        deviceRackOpen = false;
-        deviceRack.setVisible (false);
-        rackButton.setToggleState (false, juce::dontSendNotification);
-        resized();
-    };
+    deviceRack.onClose = [this] { setDeviceRackOpen (false); };
     deviceRack.onResizeHeight = [this] (int newH) {
         deviceRackHeight = juce::jlimit (140, juce::jmax (160, getHeight() - toolbarHeight - 80), newH);
         resized();
     };
     addChildComponent (deviceRack);
+    touchKeyboardRackView = makeTouchKeyboardRack (
+        engine,
+        [this] (bool barVisible) {
+            touchKeyboardRackHeight = barVisible ? touchKeyboardRackExpandedHeight : 140;
+            if (touchKeyboardRackOpen)
+                resized();
+        },
+        [this] { setTouchKeyboardRackOpen (false); });
+    addChildComponent (*touchKeyboardRackView);
 
     for (auto* c : std::initializer_list<juce::Component*> { &newButton, &openButton, &saveButton, &exportButton, &undoButton, &redoButton, &playButton, &stopButton,
                                                              &recordButton, &recordMenuButton, &patternModeButton, &songModeButton, &metronomeButton, &typingPianoButton, &countInButton, &waitInputButton,
@@ -1218,6 +1217,17 @@ void MainComponent::resized()
     else
     {
         deviceRack.setVisible (false);
+    }
+    if (touchKeyboardRackOpen && touchKeyboardRackView != nullptr)
+    {
+        touchKeyboardRackView->setVisible (true);
+        const int kh = juce::jlimit (110, juce::jmax (110, below.getHeight() - 80), touchKeyboardRackHeight);
+        touchKeyboardRackView->setBounds (below.removeFromBottom (kh));
+        touchKeyboardRackView->toFront (false);
+    }
+    else if (touchKeyboardRackView != nullptr)
+    {
+        touchKeyboardRackView->setVisible (false);
     }
     workspace.setBounds (below);
     if (danceStage != nullptr)
@@ -2360,6 +2370,47 @@ void MainComponent::toggleMode()
 
 // --- panels --------------------------------------------------------------------------------------
 
+void MainComponent::setDeviceRackOpen (bool open)
+{
+    if (open && touchKeyboardRackOpen)
+    {
+        touchKeyboardRackOpen = false;
+        if (touchKeyboardRackView != nullptr)
+            touchKeyboardRackView->setVisible (false);
+    }
+    deviceRackOpen = open;
+    deviceRack.setVisible (deviceRackOpen);
+    rackButton.setToggleState (deviceRackOpen, juce::dontSendNotification);
+    resized();
+}
+
+void MainComponent::setTouchKeyboardRackOpen (bool open)
+{
+    if (open && deviceRackOpen)
+    {
+        deviceRackOpen = false;
+        deviceRack.setVisible (false);
+        rackButton.setToggleState (false, juce::dontSendNotification);
+    }
+    if (open && workspace.isPanelVisible (Panel::touchKeyboard))
+    {
+        if (androidCompact)
+        {
+            if (workspace.isTouchKeyboardOverlayVisible())
+                workspace.toggleTouchKeyboardOverlay();
+        }
+        else
+        {
+            workspace.hide (Panel::touchKeyboard);
+        }
+        refreshPanelButtons();
+    }
+    touchKeyboardRackOpen = open;
+    if (touchKeyboardRackView != nullptr)
+        touchKeyboardRackView->setVisible (touchKeyboardRackOpen);
+    resized();
+}
+
 void MainComponent::togglePanel (Panel panel)
 {
     if (androidCompact)
@@ -2367,6 +2418,8 @@ void MainComponent::togglePanel (Panel panel)
         if (panel == Panel::touchKeyboard)
         {
             workspace.toggleTouchKeyboardOverlay();
+            if (workspace.isTouchKeyboardOverlayVisible() && touchKeyboardRackOpen)
+                setTouchKeyboardRackOpen (false);
             refreshPanelButtons();
             return;
         }
@@ -2374,6 +2427,8 @@ void MainComponent::togglePanel (Panel panel)
         return;
     }
     workspace.toggle (panel);
+    if (panel == Panel::touchKeyboard && workspace.isPanelVisible (Panel::touchKeyboard) && touchKeyboardRackOpen)
+        setTouchKeyboardRackOpen (false);
     refreshPanelButtons();
 }
 
@@ -6162,7 +6217,8 @@ juce::PopupMenu MainComponent::getMenuForIndex (int barIndex, const juce::String
         menu.addSeparator();
         menu.addItem (tr ("Typing keyboard to piano") + shortcutText ("view.typingPiano"), true, typingPiano, [this] { toggleTypingPiano(); });
         menu.addItem (tr ("Touch keyboard") + shortcutText ("view.touchKeyboard"), true, workspace.isPanelVisible (Panel::touchKeyboard), [this] { togglePanel (Panel::touchKeyboard); });
-        menu.addItem (tr ("Effect Device Rack"), true, deviceRackOpen, [this] { rackButton.onClick(); });
+        menu.addItem (tr ("Touch keyboard rack"), true, touchKeyboardRackOpen, [this] { setTouchKeyboardRackOpen (! touchKeyboardRackOpen); });
+        menu.addItem (tr ("Effect Device Rack"), true, deviceRackOpen, [this] { setDeviceRackOpen (! deviceRackOpen); });
         {
             // FL's View › Background (audit round 165z-a): the workspace image and colour of Options › Theme
             juce::PopupMenu background;

@@ -158,7 +158,10 @@ class TouchKeyboardPanel final : public juce::Component,
                                  private juce::Timer
 {
 public:
-    TouchKeyboardPanel (AudioEngine& e, bool liveMode) : engine (e), keys (e)
+    TouchKeyboardPanel (AudioEngine& e, bool liveMode,
+                        std::function<void (bool)> onBarToggledIn = {},
+                        std::function<void()> onCloseIn = {})
+        : engine (e), keys (e), onBarToggled (std::move (onBarToggledIn)), onClose (std::move (onCloseIn))
     {
         keys.setLive (liveMode);
         keys.channel = [this] { return engine.getSelectedChannel(); };
@@ -202,16 +205,33 @@ public:
         target.setColour (juce::Label::textColourId, theme::colour::textSecondary);
         target.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (target);
+        for (auto* c : std::initializer_list<juce::Component*> { &octaveDown, &octaveUp, &sizeBox, &velocityMode, &fixedVelocity, &labels, &toggleBarButton, &closeButton })
+        {
+            c->setWantsKeyboardFocus (false);
+            c->setMouseClickGrabsKeyboardFocus (false);
+        }
         toggleBarButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb2"));
         toggleBarButton.setTooltip (tr ("Hide toolbar"));
-        toggleBarButton.setColour (juce::TextButton::buttonColourId, theme::colour::bg2.withAlpha (0.85f));
-        toggleBarButton.setColour (juce::TextButton::textColourOffId, theme::colour::textSecondary);
+        toggleBarButton.setColour (juce::TextButton::buttonColourId, theme::colour::bg2.withAlpha (0.9f));
+        toggleBarButton.setColour (juce::TextButton::textColourOffId, theme::colour::textPrimary);
         toggleBarButton.onClick = [this] {
             barVisible = ! barVisible;
+            if (onBarToggled)
+                onBarToggled (barVisible);
             resized();
             repaint();
         };
         addAndMakeVisible (toggleBarButton);
+
+        closeButton.setButtonText (juce::String::fromUTF8 ("\xc3\x97"));
+        closeButton.setTooltip (tr ("Close touch keyboard rack"));
+        closeButton.setColour (juce::TextButton::buttonColourId, theme::colour::bg2.withAlpha (0.9f));
+        closeButton.setColour (juce::TextButton::textColourOffId, theme::colour::textPrimary);
+        closeButton.onClick = [this] { if (onClose) onClose(); };
+        if (onClose)
+            addAndMakeVisible (closeButton);
+        else
+            addChildComponent (closeButton);
 
         if (liveMode)
             startTimerHz (10);
@@ -243,6 +263,7 @@ public:
             fixedVelocity.setVisible (false);
             labels.setVisible (false);
             target.setVisible (false);
+            closeButton.setVisible (false);
 
             toggleBarButton.setVisible (true);
             toggleBarButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xbc"));
@@ -264,9 +285,15 @@ public:
         velocityMode.setVisible (true);
         labels.setVisible (true);
         target.setVisible (true);
+        closeButton.setVisible ((bool) onClose);
         if (area.getWidth() < 740)
         {
             auto row1 = area.removeFromTop (34).reduced (8, 4);
+            if (onClose)
+            {
+                closeButton.setBounds (row1.removeFromRight (26).reduced (0, 1));
+                row1.removeFromRight (4);
+            }
             toggleBarButton.setBounds (row1.removeFromRight (26).reduced (0, 1));
             row1.removeFromRight (4);
             octaveDown.setBounds (row1.removeFromLeft (30));
@@ -294,6 +321,11 @@ public:
         else
         {
             auto bar = area.removeFromTop (38).reduced (10, 6);
+            if (onClose)
+            {
+                closeButton.setBounds (bar.removeFromRight (26).reduced (0, 2));
+                bar.removeFromRight (4);
+            }
             toggleBarButton.setBounds (bar.removeFromRight (28).reduced (0, 2));
             bar.removeFromRight (6);
             octaveDown.setBounds (bar.removeFromLeft (30));
@@ -366,7 +398,9 @@ private:
     juce::Slider fixedVelocity;
     juce::ToggleButton labels;
     bool barVisible = true;
-    juce::TextButton toggleBarButton;
+    juce::TextButton toggleBarButton, closeButton;
+    std::function<void (bool)> onBarToggled;
+    std::function<void()> onClose;
 };
 } // namespace
 
@@ -395,6 +429,13 @@ void toggleTouchKeyboard (AudioEngine& engine)
 std::unique_ptr<juce::Component> makeLiveTouchKeyboard (AudioEngine& engine)
 {
     return std::make_unique<TouchKeyboardPanel> (engine, true);
+}
+
+std::unique_ptr<juce::Component> makeTouchKeyboardRack (AudioEngine& engine,
+                                                        std::function<void (bool barVisible)> onBarToggled,
+                                                        std::function<void()> onClose)
+{
+    return std::make_unique<TouchKeyboardPanel> (engine, true, std::move (onBarToggled), std::move (onClose));
 }
 
 std::unique_ptr<juce::Component> makeTouchKeyboardPanel (AudioEngine& engine)

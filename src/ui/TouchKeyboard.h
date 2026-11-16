@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -17,6 +18,11 @@ bool isTouchKeyboardOpen();
 
 // Live panel component for embedding in Workspace.
 std::unique_ptr<juce::Component> makeLiveTouchKeyboard (AudioEngine& engine);
+
+// Bottom-rack Touch Keyboard component with bar-toggle and close callbacks.
+std::unique_ptr<juce::Component> makeTouchKeyboardRack (AudioEngine& engine,
+                                                        std::function<void (bool barVisible)> onBarToggled = {},
+                                                        std::function<void()> onClose = {});
 
 // The content for --snapshot mode (`pressed` keys drawn as held, nothing is played).
 std::unique_ptr<juce::Component> makeTouchKeyboardPanel (AudioEngine& engine);

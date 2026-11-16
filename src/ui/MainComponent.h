@@ -530,6 +530,12 @@ private:
     DeviceRackComponent deviceRack { engine };
     bool deviceRackOpen = false;
     int deviceRackHeight = 210;
+    std::unique_ptr<juce::Component> touchKeyboardRackView;
+    bool touchKeyboardRackOpen = false;
+    int touchKeyboardRackExpandedHeight = 205;
+    int touchKeyboardRackHeight = 205;
+    void setDeviceRackOpen (bool open);
+    void setTouchKeyboardRackOpen (bool open);
     GlobalGridBox gridBox; // global grid of the editors (see ui/EditorTools.h)
     // FL's Snap panel: the magnet before the snap box (TToolbarForm.SnapLabel, a click toggles the snap like Backspace;
     // round 170e, Busy Works review #5)
