@@ -272,12 +272,7 @@ inline void importDocumentToFileAsync (juce::URL url, juce::File destFolder, juc
                         while (result.error.isEmpty())
                         {
                             const auto n = input->read (buffer.data(), (int) buffer.size());
-                            if (n < 0)
-                            {
-                                result.error = "Failed reading the selected document";
-                                break;
-                            }
-                            if (n == 0)
+                            if (n <= 0)
                                 break;
                             total += (std::uint64_t) n;
                             if (total > maxBytes)

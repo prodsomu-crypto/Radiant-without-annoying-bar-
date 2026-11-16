@@ -741,6 +741,34 @@ private:
 
     void chooseFont()
     {
+       #if JUCE_ANDROID
+        lynx::androidsf::requestPick ([safe = juce::Component::SafePointer<SoundFontEditor> (this)] (const juce::String& localPath, const juce::String& err) {
+            if (safe == nullptr)
+                return;
+            if (err.isNotEmpty())
+            {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"), err);
+                return;
+            }
+            if (localPath.isEmpty())
+                return;
+            const auto path = std8 (localPath);
+            int bank = 0, program = 0;
+            std::string sfError;
+            if (! firstSoundFontPreset (path, bank, program, &sfError))
+            {
+                const auto msg = sfError.empty()
+                    ? tr ("This file is not a SoundFont Radiant can read.")
+                    : tr ("This file is not a SoundFont Radiant can read.") + " " + juce::String::fromUTF8 (sfError.c_str());
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Load SoundFont"), msg);
+                return;
+            }
+            loadInto (safe->engine, safe->channel, path, bank, program);
+            sf::PresetIndex::shared().addFont (path);
+            safe->refreshAll();
+        });
+        return;
+       #endif
         const auto start = currentPath().empty() ? juce::File::getSpecialLocation (juce::File::userDocumentsDirectory) : juce::File (u8 (currentPath()));
        #if JUCE_ANDROID
         const juce::String filter = "*";

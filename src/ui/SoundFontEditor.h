@@ -44,4 +44,33 @@ bool openSoundFontFile (AudioEngine& engine, const juce::File& file, int channel
 // Drag-and-drop of a preset from the editor's lists ("lynx-sf-preset|bank|program|path")
 juce::String soundFontDragDescription (const std::string& path, int bank, int program);
 bool parseSoundFontDrag (const juce::String& description, std::string& path, int& bank, int& program);
+
+#if JUCE_ANDROID
+namespace androidsf
+{
+inline std::function<void()>& requestHook()
+{
+    static std::function<void()> hook;
+    return hook;
+}
+inline std::function<void (const juce::String&, const juce::String&)>& pendingCallback()
+{
+    static std::function<void (const juce::String&, const juce::String&)> cb;
+    return cb;
+}
+inline void requestPick (std::function<void (const juce::String&, const juce::String&)> cb)
+{
+    pendingCallback() = std::move (cb);
+    if (requestHook())
+        requestHook()();
+}
+inline void deliverPicked (const juce::String& path, const juce::String& error)
+{
+    auto cb = std::move (pendingCallback());
+    pendingCallback() = nullptr;
+    if (cb)
+        cb (path, error);
+}
+} // namespace androidsf
+#endif
 } // namespace lynx

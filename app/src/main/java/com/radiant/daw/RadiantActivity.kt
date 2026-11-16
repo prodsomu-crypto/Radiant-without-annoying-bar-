@@ -265,6 +265,40 @@ private fun RadiantApp() {
         }
     }
 
+    val soundFontLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) {
+            NativeBridge.deliverAndroidSoundFont("", "")
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            try {
+                val destPath = withContext(Dispatchers.IO) {
+                    val rawName = contentDisplayName(context, uri) ?: "soundfont.sf2"
+                    val safeName = rawName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    val dir = File(context.filesDir, "imported-soundfonts").apply { mkdirs() }
+                    val dest = File(dir, safeName)
+                    val temp = File(dir, "$safeName.pending")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(temp).use { output -> input.copyTo(output) }
+                    } ?: throw IOException("Could not open the selected SoundFont.")
+                    if (temp.length() == 0L) {
+                        temp.delete()
+                        throw IOException("Selected SoundFont is empty.")
+                    }
+                    try {
+                        Files.move(temp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+                    } catch (_: AtomicMoveNotSupportedException) {
+                        Files.move(temp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    dest.absolutePath
+                }
+                NativeBridge.deliverAndroidSoundFont(destPath, "")
+            } catch (error: Exception) {
+                NativeBridge.deliverAndroidSoundFont("", error.message ?: "Could not import the selected SoundFont.")
+            }
+        }
+    }
+
     val saveAsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-radiant-project")) { uri ->
         if (uri != null) {
             val access = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -324,6 +358,7 @@ private fun RadiantApp() {
             }
             when (NativeBridge.takeAndroidStorageAction()) {
                 1 -> openDocumentLauncher.launch(arrayOf("*/*"))
+                4 -> soundFontLauncher.launch(arrayOf("*/*"))
                 2 -> {
                     val name = NativeBridge.getAndroidProjectName().ifBlank { "Untitled" }
                         .removeSuffix(".lynx").removeSuffix(".radiant")

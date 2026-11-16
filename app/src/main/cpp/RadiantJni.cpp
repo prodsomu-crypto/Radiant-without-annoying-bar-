@@ -6,6 +6,7 @@
 #include "core/TouchGestureState.h"
 #include "engine/AudioEngine.h" 
 #include "ui/MainComponent.h"
+#include "ui/SoundFontEditor.h"
 #include "ui/Theme.h"
 #include "ui/ThemeSettings.h"
 
@@ -15,6 +16,7 @@ std::unique_ptr<juce::ScopedJuceInitialiser_GUI> juceGuiInitialiser;
 std::unique_ptr<lynx::theme::LookAndFeel> radiantLookAndFeel;
 std::unique_ptr<lynx::AudioEngine> audioEngine;
 std::unique_ptr<lynx::MainComponent> mainComponent;
+std::atomic<bool> soundFontPickRequested { false };
 
 juce::String stringFromJava (JNIEnv* env, jstring value)
 {
@@ -46,6 +48,7 @@ void initialiseRuntime()
     // Playback output does not require microphone permission. Recording input stays opt-in and is opened only
     // after Android grants RECORD_AUDIO.
     audioEngine = std::make_unique<lynx::AudioEngine>(true);
+    lynx::androidsf::requestHook() = [] { soundFontPickRequested.store (true); };
 }
 
 } // namespace
@@ -223,7 +226,17 @@ Java_com_radiant_daw_NativeBridge_saveCurrentProjectAs(JNIEnv*, jclass)
 extern "C" JNIEXPORT jint JNICALL
 Java_com_radiant_daw_NativeBridge_takeAndroidStorageAction(JNIEnv*, jclass)
 {
+    if (soundFontPickRequested.exchange (false))
+        return 4;
     return mainComponent != nullptr ? mainComponent->takeAndroidStorageAction() : 0;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_radiant_daw_NativeBridge_deliverAndroidSoundFont(JNIEnv* env, jclass, jstring path, jstring error)
+{
+    const auto p = stringFromJava (env, path);
+    const auto e = stringFromJava (env, error);
+    juce::MessageManager::callAsync ([p, e] { lynx::androidsf::deliverPicked (p, e); });
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
