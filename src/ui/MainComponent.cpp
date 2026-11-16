@@ -520,6 +520,29 @@ MainComponent::MainComponent (AudioEngine& e, bool restoreUserSettings)
     recent.setMaxNumberOfItems (12);
     recent.restoreFromString (PluginHost::settingsFolder().getChildFile ("recentes.txt").loadFileAsString());
     addAndMakeVisible (menuBar);
+    rackButton.setFlat (false);
+    rackButton.setClickingTogglesState (true);
+    rackButton.setWantsKeyboardFocus (false);
+    rackButton.setMouseClickGrabsKeyboardFocus (false);
+    rackButton.setTooltip (tr ("Show or hide the bottom Effect Device Rack"));
+    rackButton.onClick = [this] {
+        deviceRackOpen = ! deviceRackOpen;
+        deviceRack.setVisible (deviceRackOpen);
+        rackButton.setToggleState (deviceRackOpen, juce::dontSendNotification);
+        resized();
+    };
+    addAndMakeVisible (rackButton);
+    deviceRack.onClose = [this] {
+        deviceRackOpen = false;
+        deviceRack.setVisible (false);
+        rackButton.setToggleState (false, juce::dontSendNotification);
+        resized();
+    };
+    deviceRack.onResizeHeight = [this] (int newH) {
+        deviceRackHeight = juce::jlimit (140, juce::jmax (160, getHeight() - toolbarHeight - 80), newH);
+        resized();
+    };
+    addChildComponent (deviceRack);
 
     for (auto* c : std::initializer_list<juce::Component*> { &newButton, &openButton, &saveButton, &exportButton, &undoButton, &redoButton, &playButton, &stopButton,
                                                              &recordButton, &recordMenuButton, &patternModeButton, &songModeButton, &metronomeButton, &typingPianoButton, &countInButton, &waitInputButton,
@@ -1018,6 +1041,8 @@ void MainComponent::resized()
         put (undoButton, ur.removeFromLeft (h));
         ur.removeFromLeft (2);
         put (redoButton, ur.removeFromLeft (h));
+        ur.removeFromLeft (4);
+        put (rackButton, juce::jmin (56, juce::jmax (h, ur.getWidth() / 3)));
         titleArea = {};
         placeHintBar (ur.withTrimmedLeft (8).withWidth (juce::jmin (900, juce::jmax (0, ur.getWidth() - 8))).reduced (0, 1));
         fixedToolbarArea = bar;
@@ -1032,6 +1057,8 @@ void MainComponent::resized()
         put (undoButton, row1Rect.removeFromLeft (h));
         row1Rect.removeFromLeft (2);
         put (redoButton, row1Rect.removeFromLeft (h));
+        row1Rect.removeFromLeft (4);
+        put (rackButton, juce::jmin (56, juce::jmax (h, row1Rect.getWidth() / 3)));
         titleArea = row1Rect.withTrimmedLeft (8).withTrimmedRight (4);
         if (titleArea.getWidth() < 60)
             titleArea = {};
@@ -1177,6 +1204,11 @@ void MainComponent::resized()
     auto below = getLocalBounds().withTrimmedTop (toolbarHeight + tray);
     if (updateBar.isVisible())
         updateBar.setBounds (below.removeFromTop (updater::UpdateBar::height));
+    if (deviceRackOpen && deviceRack.isVisible())
+    {
+        const int rh = juce::jlimit (140, juce::jmax (140, below.getHeight() - 80), deviceRackHeight);
+        deviceRack.setBounds (below.removeFromBottom (rh));
+    }
     workspace.setBounds (below);
     if (danceStage != nullptr)
     {
@@ -6120,6 +6152,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int barIndex, const juce::String
         menu.addSeparator();
         menu.addItem (tr ("Typing keyboard to piano") + shortcutText ("view.typingPiano"), true, typingPiano, [this] { toggleTypingPiano(); });
         menu.addItem (tr ("Touch keyboard") + shortcutText ("view.touchKeyboard"), true, workspace.isPanelVisible (Panel::touchKeyboard), [this] { togglePanel (Panel::touchKeyboard); });
+        menu.addItem (tr ("Effect Device Rack"), true, deviceRackOpen, [this] { rackButton.onClick(); });
         {
             // FL's View › Background (audit round 165z-a): the workspace image and colour of Options › Theme
             juce::PopupMenu background;

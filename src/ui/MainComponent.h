@@ -27,6 +27,7 @@
 #include "ui/Toolbar.h"
 #include "ui/Updater.h"
 #include "ui/ValueControl.h"
+#include "ui/DeviceRack.h"
 #include "ui/Workspace.h"
 
 namespace lynx
@@ -525,6 +526,10 @@ private:
                                                                  IconButton { "browserPanel", Icon::browser },
                                                                  IconButton { "touchKeyboardPanel", Icon::keyboard } };
     IconButton pluginPickerButton { "pluginPicker", Icon::pluginPicker };
+    IconButton rackButton { "deviceRack", Icon::settings, "Rack" };
+    DeviceRackComponent deviceRack { engine };
+    bool deviceRackOpen = false;
+    int deviceRackHeight = 210;
     GlobalGridBox gridBox; // global grid of the editors (see ui/EditorTools.h)
     // FL's Snap panel: the magnet before the snap box (TToolbarForm.SnapLabel, a click toggles the snap like Backspace;
     // round 170e, Busy Works review #5)
