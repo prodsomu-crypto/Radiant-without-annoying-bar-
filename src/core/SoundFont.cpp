@@ -1188,6 +1188,7 @@ private:
         {
             case 0: bankSelect = value; break;
             case 1: modWheel = v; break;
+            case 2: ccBreath = v; break;
             case 6:
                 if (rpn == 0)
                     rpnBend = (float) value;
@@ -1199,6 +1200,8 @@ private:
             case 7: ccVolume = v; break;
             case 10: ccPan = v * 2.0f - 1.0f; break;
             case 11: ccExpression = v; break;
+            case 71: ccResonance = v; break;
+            case 74: ccCutoff = v; break;
             case 64:
                 sustainPedal = value >= 64;
                 if (! sustainPedal)
@@ -1218,7 +1221,7 @@ private:
                     voice.active = false;
                 break;
             case 121: // reset all controllers
-                modWheel = 0, ccExpression = 1, ccPan = 0, bend = 0, pressure = 0, sustainPedal = false, rpnBend = -1;
+                modWheel = 0, ccBreath = 1, ccExpression = 1, ccPan = 0, ccCutoff = 1, ccResonance = 0, bend = 0, pressure = 0, sustainPedal = false, rpnBend = -1;
                 break;
             case 123: case 124: case 125: case 126: case 127:
                 allNotesOff();
@@ -1511,7 +1514,7 @@ private:
         const auto dt = (float) n / rate;
         const auto quality = (int) param (pResampling);
         const auto bendCents = bend * (rpnBend >= 0 ? rpnBend : param (pBendRange)) * 100.0f;
-        const auto master = dbToGain (param (pVolume)) * ccVolume * ccVolume * ccExpression * ccExpression;
+        const auto master = dbToGain (param (pVolume)) * ccVolume * ccVolume * ccExpression * ccExpression * ccBreath * ccBreath;
         const auto revMult = levelMultiplier (param (pReverbAmount)), choMult = levelMultiplier (param (pChorusAmount));
         const auto revOverride = param (pReverbOverride) >= 0.5f, choOverride = param (pChorusOverride) >= 0.5f;
         const auto lfoOverride = param (pLfoAmount) > 0.0f;
@@ -1535,11 +1538,13 @@ private:
             auto cents = v.baseCents + knobCents + (restCents - v.restAtStart) + v.slideCents + bendCents + modLevel * (float) r.modEnvToPitch + modLfo * (float) r.modLfoToPitch;
             cents += vibLfo * ((lfoOverride ? lfoDepth : (float) r.vibLfoToPitch) + (std::max (modWheel, param (pModWheel)) + pressure) * 50.0f);
             const auto step = (double) centsToRatio (cents) * (double) r.sampleRate / (double) rate;
-            if (v.filter.on)
+            const auto filterOn = v.filter.on || ccCutoff < 0.995f || ccResonance > 0.005f;
+            if (filterOn)
             {
                 const auto envToFc = cutMod > 0.0f ? cutMod * 4800.0f : (float) r.modEnvToFilterFc;
-                const auto fc = v.filterBaseCents + modLevel * envToFc + modLfo * (float) r.modLfoToFilterFc;
-                v.filter.lowpass (8.176f * centsToRatio (std::clamp (fc, 1500.0f, 13500.0f)), v.filterQ, rate);
+                const auto fc = v.filterBaseCents + modLevel * envToFc + modLfo * (float) r.modLfoToFilterFc + (ccCutoff - 1.0f) * 9600.0f;
+                const auto q = v.filterQ * std::pow (10.0f, (ccResonance * 18.0f) / 20.0f);
+                v.filter.lowpass (8.176f * centsToRatio (std::clamp (fc, 1500.0f, 13500.0f)), q, rate);
             }
             const auto tremolo = r.modLfoToVolume != 0 ? dbToGain (-0.1f * modLfo * (float) r.modLfoToVolume) : 1.0f;
             v.amp.advance (dt);
@@ -1567,7 +1572,7 @@ private:
                     break;
                 }
                 auto s = interpolate (font, v, pos, quality);
-                if (v.filter.on)
+                if (filterOn)
                     s = v.filter.process (s);
                 g += gStep;
                 const auto out = s * g;
@@ -1647,7 +1652,7 @@ private:
     std::uint64_t autoSet = 0;
     std::atomic<int> polyLimit { 0 };
     // MIDI state
-    float bend = 0, modWheel = 0, pressure = 0, ccVolume = 1, ccExpression = 1, ccPan = 0, ccReverb = 0, ccChorus = 0, rpnBend = -1;
+    float bend = 0, modWheel = 0, pressure = 0, ccVolume = 1, ccExpression = 1, ccBreath = 1, ccPan = 0, ccCutoff = 1, ccResonance = 0, ccReverb = 0, ccChorus = 0, rpnBend = -1;
     bool sustainPedal = false;
     int bankSelect = 0, bankOverride = -1, programOverride = -1, rpnMsb = 127, rpnLsb = 127, rpn = -1;
     // effects

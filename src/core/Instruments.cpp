@@ -915,6 +915,44 @@ public:
         bendMul = std::isfinite (semitones) ? std::exp2 ((double) std::clamp (semitones, -48.0f, 48.0f) / 12.0) : 1.0;
     }
 
+    void midiMessage (const std::uint8_t* bytes, int size) noexcept override
+    {
+        if (bytes != nullptr && size >= 2 && (bytes[0] & 0xF0) == 0xD0)
+            ccPressure = std::clamp ((float) (bytes[1] & 127) / 127.0f, 0.0f, 1.0f);
+    }
+
+    void controlChange (int cc, float value) noexcept override
+    {
+        const auto v = std::isfinite (value) ? std::clamp (value, 0.0f, 1.0f) : 0.0f;
+        switch (cc)
+        {
+            case 1: ccModWheel = v; break;
+            case 2: ccBreath = v; updateCcFilter(); break;
+            case 71: ccResonance = v; updateCcFilter(); break;
+            case 72:
+                ccReleaseScale = std::pow (4.0f, v * 2.0f - 1.0f);
+                releaseCoeff = decayCoefficient (std::max (0.005, (double) settings.release * ccReleaseScale), sampleRate);
+                break;
+            case 73:
+                ccAttackScale = std::pow (4.0f, v * 2.0f - 1.0f);
+                attackStep = (float) (1.0 / (std::max (0.0005, (double) settings.attack * ccAttackScale) * sampleRate));
+                break;
+            case 74: ccCutoff = v; updateCcFilter(); break;
+            case 120: allNotesOff(); break;
+            case 121:
+                ccModWheel = ccPressure = ccResonance = 0.0f;
+                ccBreath = ccCutoff = ccAttackScale = ccReleaseScale = 1.0f;
+                updateCoefficients();
+                break;
+            case 123: case 124: case 125: case 126: case 127:
+                for (auto& voice : voices)
+                    if (voice.active && ! voice.releasing)
+                        noteOff (voice.key);
+                break;
+            default: break;
+        }
+    }
+
     void setNextNoteExpression (float pan, float cents, bool porta) noexcept override
     {
         nextPan = pan;
@@ -1055,11 +1093,13 @@ public:
                     --v.glideLeft;
                 }
 
-                if (modulated)
+                const auto midiVibSemitones = (ccModWheel + ccPressure) * 0.5f;
+                if (modulated || midiVibSemitones > 0.0f)
                 {
-                    for (std::size_t e = 0; e < 2; ++e)
-                        if (modEnv[e].active)
-                            modEnv[e].advance (v.mod[e]);
+                    if (modulated)
+                        for (std::size_t e = 0; e < 2; ++e)
+                            if (modEnv[e].active)
+                                modEnv[e].advance (v.mod[e]);
 
                     // every 16 samples (the control "tick"): pitch, filter, volume and pan
                     if (--v.controlCountdown <= 0)
@@ -1076,6 +1116,11 @@ public:
                             const auto r = std::min (1.0, 3.0 * (v.age + 1) / sampleRate);
                             const auto phase = vibratoPhase + 6.0 * i / sampleRate;
                             semitones += (float) (settings.vibratoCents / 100.0 * r * r * std::sin (2.0 * 3.141592653589793 * phase));
+                        }
+                        if (midiVibSemitones > 0.0f)
+                        {
+                            const auto phase = vibratoPhase + 6.0 * i / sampleRate;
+                            semitones += midiVibSemitones * (float) std::sin (2.0 * 3.141592653589793 * phase);
                         }
                         if (lfos[lfoCutoff].active)
                             octaves += lfos[lfoCutoff].amount * lfos[lfoCutoff].tick (v.lfo[lfoCutoff], 16);
@@ -1096,11 +1141,13 @@ public:
                         }
 
                         if (filterModulated)
-                            v.filter.set (settings.cutoff * std::exp2 (octaves), settings.resonance, sampleRate, settings.filterType, settings.ladder);
+                            v.filter.set (effectiveCutoff() * std::exp2 (octaves), effectiveResonance(), sampleRate, settings.filterType, settings.ladder);
                     }
 
                     v.lfoGain += v.lfoGainStep;
                 }
+                else
+                    v.pitchMul = 1.0;
 
                 float sum = 0.0f, sumR = 0.0f, modulator = 0.0f;
                 double fmShift = 0.0;
@@ -1373,9 +1420,9 @@ private:
     {
         if (std::any_of (settings.osc.begin(), settings.osc.end(), [] (const SynthOscillator& o) { return o.wave == Waveform::spectral; }))
             buildWavetables(); // only when the spectrum changes
-        attackStep = (float) (1.0 / (std::max (0.0005, (double) settings.attack) * sampleRate));
+        attackStep = (float) (1.0 / (std::max (0.0005, (double) settings.attack * ccAttackScale) * sampleRate));
         decayCoeff = decayCoefficient (std::max (0.001, (double) settings.decay), sampleRate);
-        releaseCoeff = decayCoefficient (std::max (0.005, (double) settings.release), sampleRate);
+        releaseCoeff = decayCoefficient (std::max (0.005, (double) settings.release * ccReleaseScale), sampleRate);
 
         for (std::size_t o = 0; o < 3; ++o)
         {
@@ -1390,7 +1437,7 @@ private:
         osc3Modulates = settings.am || settings.fm > 0.0f;
         fmDecayCoeff = settings.fmDecay > 0.0f ? decayCoefficient (std::max (0.001, (double) settings.fmDecay), sampleRate) : 1.0f;
 
-        sharedFilter.set (settings.cutoff, settings.resonance, sampleRate, settings.filterType, settings.ladder);
+        updateCcFilter();
         modEnv[0] = ModCoefficients::make (settings.filterEnv, sampleRate);
         modEnv[1] = ModCoefficients::make (settings.pitchEnv, sampleRate);
         auto anyLfo = false;
@@ -1435,6 +1482,20 @@ private:
     std::atomic<float> channelPitch { 0.0f }; // cents
     double bendMul = 1.0; // the pitch wheel (round 162), audio thread
     bool nextPorta = false;
+    float ccModWheel = 0.0f, ccPressure = 0.0f, ccBreath = 1.0f, ccCutoff = 1.0f, ccResonance = 0.0f;
+    float ccAttackScale = 1.0f, ccReleaseScale = 1.0f;
+    double effectiveCutoff() const noexcept
+    {
+        return std::clamp ((double) settings.cutoff * std::pow (0.005, (double) (1.0f - ccCutoff)) * std::pow (0.1, (double) (1.0f - ccBreath)), 20.0, sampleRate * 0.45);
+    }
+    float effectiveResonance() const noexcept
+    {
+        return std::clamp (settings.resonance + ccResonance * 0.95f, 0.0f, 0.98f);
+    }
+    void updateCcFilter() noexcept
+    {
+        sharedFilter.set (effectiveCutoff(), effectiveResonance(), sampleRate, settings.filterType, settings.ladder);
+    }
     Noise noise;
     std::array<SynthVoice, 16> voices {};
 };
@@ -1767,7 +1828,7 @@ public:
         // Channel settings' pitch did nothing to clips); Resample changes its speed, "keep pitch" its pitch only
         const auto semitones = clipMode ? (double) pitch.load() + nextCents / 100.0
                                         : (sliced ? 0 : key - root) + tune + (double) pitch.load() + nextCents / 100.0;
-        const auto attackSeconds = clipMode ? 0.0f : attack.load();
+        const auto attackSeconds = clipMode ? 0.0f : attack.load() * ccAttackScale;
 
         *target = {};
         target->active = true;
@@ -2190,7 +2251,7 @@ public:
             }
 
         // with release, the released note decays; without release the sample plays in full (one-shot)
-        const auto seconds = release.load();
+        const auto seconds = release.load() * ccReleaseScale;
 
         if (seconds <= 0.0f)
             return;
@@ -2337,7 +2398,8 @@ public:
         }
 
         // channel filter (TPT SVF, same as the synth); off when open, without resonance and without modulation
-        const auto fc = cutoff.load(), res = resonance.load();
+        const auto fc = std::clamp (cutoff.load() * (float) std::pow (0.005, (double) (1.0f - ccCutoff)) * (float) std::pow (0.1, (double) (1.0f - ccBreath)), 20.0f, (float) (sampleRate * 0.45));
+        const auto res = std::clamp (resonance.load() + ccResonance * 0.95f, 0.0f, 0.98f);
         const auto type = filterType.load();
         const auto filterModulated = modEnv[0].active || lfos[lfoCutoff].active;
         const auto filtered = fc < 19500.0f || res > 0.0f || type != 0 || filterModulated;
@@ -2863,6 +2925,30 @@ public:
         storeKnob (index, samplerparam::toNatural (index, value));
     }
 
+    void controlChange (int cc, float value) noexcept override
+    {
+        const auto v = std::isfinite (value) ? std::clamp (value, 0.0f, 1.0f) : 0.0f;
+        switch (cc)
+        {
+            case 2: ccBreath = v; break;
+            case 71: ccResonance = v; break;
+            case 72: ccReleaseScale = std::pow (4.0f, v * 2.0f - 1.0f); break;
+            case 73: ccAttackScale = std::pow (4.0f, v * 2.0f - 1.0f); break;
+            case 74: ccCutoff = v; break;
+            case 120: allNotesOff(); break;
+            case 121:
+                ccBreath = ccCutoff = ccAttackScale = ccReleaseScale = 1.0f;
+                ccResonance = 0.0f;
+                break;
+            case 123: case 124: case 125: case 126: case 127:
+                for (auto& voice : voices)
+                    if (voice.active && voice.stage < 3)
+                        noteOff (voice.key);
+                break;
+            default: break;
+        }
+    }
+
 private:
     std::atomic<bool> porta { false };
     std::atomic<float> outGain { 1.0f }; // SamplerSettings::gainDb as a factor
@@ -2937,6 +3023,8 @@ private:
     std::atomic<bool> useLoops { true }, fastDeclick { false }, panTriangular { false };
     std::atomic<bool> flVelocityLaw { false }; // SamplerSettings::flVelocityLaw
     std::atomic<int> declickMode { 0 };
+    float ccBreath = 1.0f, ccCutoff = 1.0f, ccResonance = 0.0f;
+    float ccAttackScale = 1.0f, ccReleaseScale = 1.0f;
 };
 } // namespace
 

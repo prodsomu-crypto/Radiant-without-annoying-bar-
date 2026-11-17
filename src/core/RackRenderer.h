@@ -23,6 +23,7 @@
 #include "core/LiveEventQueue.h"
 #include "core/LiveInput.h"
 #include "core/Meters.h"
+#include "core/MidiControls.h"
 #include "core/Pdc.h"
 #include "core/Performance.h"
 #include "core/Scheduler.h"
@@ -463,9 +464,33 @@ private:
     EventBuffer events;
     std::vector<float> mixBuffers; // maxMixerTracks * 2 * blockCapacity
     std::array<float, RackState::maxAutomations> automationValues {}; // NaN = not evaluated yet
-    // the pitch bend an automation / event lane last gave each LYNX instrument (0..1; NaN = none yet; issue #12)
-    std::array<float, maxChannels> automatedBend {};
-    bool automatedBendReset = false;
+    struct ChannelMidiState
+    {
+        float ccVolume = 1.0f;
+        float ccExpression = 1.0f;
+        float ccBreath = 1.0f;
+        float ccPan = 0.0f;
+        float ccBalance = 0.0f;
+        float ccModWheel = 0.0f;
+        float ccPressure = 0.0f;
+        float ccCutoff = 1.0f;
+        float ccResonance = 0.0f;
+        double vibPhase = 0.0;
+        std::uint8_t sustainPedal = 0; // bit 0: CC64 damper, bit 1: CC69 hold2
+        NoteMask sustainHeld {};
+        float svfFc = -1.0f, svfRes = -1.0f;
+        float svfA1 = 1.0f, svfA2 = 0.0f, svfA3 = 0.0f, svfK = 2.0f;
+        float svfLowL = 0.0f, svfBandL = 0.0f, svfLowR = 0.0f, svfBandR = 0.0f;
+        std::array<float, midictl::count> lastAutomated {};
+    };
+    std::vector<ChannelMidiState> channelMidi, channelMidiScratch;
+    struct ActiveMidiTarget
+    {
+        int channel = -1;
+        int param = 0;
+    };
+    std::vector<ActiveMidiTarget> activeMidiTargets;
+    std::vector<ActiveMidiTarget> seenMidiTargets;
     std::array<std::atomic<std::uint32_t>, RackState::maxAutomations / 32> overridden {}; // touched while recording
     std::atomic<bool> anyOverridden { false };
     void clearOverriddenValues() noexcept;
@@ -511,6 +536,11 @@ private:
     std::array<int, maxChannels> layerTurn {};
     std::uint32_t layerRandom = 0x2545F491u;
     void applyLiveControl (const RackState& state, const NoteEvent& e) noexcept;
+    void dispatchMidiControl (const RackState& state, int channel, int param, float value) noexcept;
+    void recordChannelMidiControl (const RackState& state, int channel, int keyOrType, float value) noexcept;
+    void releaseSustainNotes (const RackState& state, int channel) noexcept;
+    void resetChannelMidiState (int channel, bool clearLastAutomated = true) noexcept;
+    void resetDrivenMidiControls (const RackState& state) noexcept;
     WorkerPool* workers = nullptr;
     LiveInput* liveInput = nullptr;
     HardwareOutput* hwOut = nullptr;

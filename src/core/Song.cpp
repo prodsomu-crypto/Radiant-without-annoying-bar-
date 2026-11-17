@@ -2,6 +2,7 @@
 #include "core/ModelParams.h"
 #include "core/FlSynths.h"
 #include "core/VoltageController.h"
+#include "core/MidiControls.h"
 #include "core/MidiOut.h"
 #include "core/PatternBlocks.h"
 
@@ -1021,6 +1022,8 @@ float Song::targetValue (const AutomationTarget& t) const noexcept
             // the knobs of an FL engine kept in the channel's state (round 168n)
             if (const auto v = modelparams::value01 (channels[(std::size_t) t.index], t.param))
                 return *v;
+            if (midictl::isMidiParam (t.param))
+                return midictl::defaultValue (t.param);
             return 0.5f;
         case AutomationTargetKind::mixerSend:
             return validTrack && routes (t.index, t.slot) ? faderPosition (routeLevel (t.index, t.slot)) : -1.0f;

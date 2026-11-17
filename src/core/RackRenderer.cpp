@@ -1129,6 +1129,55 @@ void RackState::buildMidiRoutes()
     }
 }
 
+namespace
+{
+inline bool isSilentControlKind (InstrumentKind k) noexcept
+{
+    return k == InstrumentKind::midiOut || k == InstrumentKind::layer || k == InstrumentKind::controller
+        || k == InstrumentKind::dashboard || k == InstrumentKind::voltage || k == InstrumentKind::vfx
+        || k == InstrumentKind::fruitydance || k == InstrumentKind::wasp;
+}
+
+inline bool usesRackGainPan (InstrumentKind k) noexcept
+{
+    return ! isSilentControlKind (k) && k != InstrumentKind::plugin && k != InstrumentKind::soundfont
+        && k != InstrumentKind::patcher;
+}
+
+inline bool usesRackSustain (InstrumentKind k) noexcept
+{
+    return ! isSilentControlKind (k) && k != InstrumentKind::plugin && k != InstrumentKind::soundfont
+        && k != InstrumentKind::toxic && k != InstrumentKind::patcher;
+}
+
+inline bool usesRackVibrato (InstrumentKind k) noexcept
+{
+    return ! isSilentControlKind (k) && k != InstrumentKind::plugin && k != InstrumentKind::soundfont
+        && k != InstrumentKind::toxic && k != InstrumentKind::synth && k != InstrumentKind::patcher;
+}
+
+inline bool usesRackFilter (InstrumentKind k) noexcept
+{
+    return ! isSilentControlKind (k) && k != InstrumentKind::plugin && k != InstrumentKind::soundfont
+        && k != InstrumentKind::synth && k != InstrumentKind::sampler && k != InstrumentKind::audioClip
+        && k != InstrumentKind::patcher;
+}
+
+inline float neutralMidiValue (int param) noexcept
+{
+    if (midictl::isPitchBend (param))
+        return 0.5f;
+    if (midictl::isCc (param))
+        switch (param - midictl::ccBase)
+        {
+            case 2: case 7: case 11: case 74: return 1.0f;
+            case 8: case 10: case 72: case 73: return 0.5f;
+            default: break;
+        }
+    return 0.0f;
+}
+} // namespace
+
 void RackState::buildAutomationTables()
 {
     const auto& automations = song.automations;
@@ -1201,8 +1250,8 @@ void RackState::buildAutomationTables()
                                   || song.channels[(std::size_t) t.index].instrument == InstrumentKind::soundfont // (LYNX Soundfont's knobs)
                                   || (song.channels[(std::size_t) t.index].instrument == InstrumentKind::midiOut
                                       && (midictl::isMidiParam (t.param) || (t.param >= 0 && t.param <= midiout::controlCount)))
-                                  // a recorded / drawn pitch bend plays on any instrument (issue #12)
-                                  || midictl::isPitchBend (t.param)
+                                  // recorded / drawn MIDI CCs, aftertouch and pitch bend play on any instrument
+                                  || midictl::isMidiParam (t.param)
                                   // an Envelope Controller's global Mod X / Y (round 164f)
                                   || (song.channels[(std::size_t) t.index].instrument == InstrumentKind::controller
                                       && (t.param == envelopeControllerModXParam || t.param == envelopeControllerModYParam))
@@ -1624,6 +1673,17 @@ void RackRenderer::prepare (double sr, int maxBlockSize)
     heldScratch.assign ((std::size_t) maxChannels, {});
     polyLayers.assign ((std::size_t) maxChannels, {});
     polyScratch.assign ((std::size_t) maxChannels, {});
+    channelMidi.assign ((std::size_t) maxChannels, {});
+    channelMidiScratch.assign ((std::size_t) maxChannels, {});
+    for (int c = 0; c < maxChannels; ++c)
+    {
+        channelMidi[(std::size_t) c].lastAutomated.fill (std::numeric_limits<float>::quiet_NaN());
+        channelMidiScratch[(std::size_t) c].lastAutomated.fill (std::numeric_limits<float>::quiet_NaN());
+    }
+    activeMidiTargets.clear();
+    activeMidiTargets.reserve (128);
+    seenMidiTargets.clear();
+    seenMidiTargets.reserve (128);
 
     if (lastState != nullptr)
     {
@@ -1741,8 +1801,9 @@ void RackRenderer::updateAutomation (const RackState& state, double startTick) n
                 const auto t = std::fmod (std::max (0.0, startTick), length);
 
                 for (const auto& lane : state.eventLanes)
-                    if (lane.pattern == current)
-                        automationValues[(std::size_t) lane.slot] = pattern.events[(std::size_t) lane.lane].valueAt (t);
+                    automationValues[(std::size_t) lane.slot] = lane.pattern == current
+                        ? pattern.events[(std::size_t) lane.lane].valueAt (t)
+                        : std::numeric_limits<float>::quiet_NaN();
             }
         }
         else
@@ -1783,6 +1844,8 @@ void RackRenderer::updateAutomation (const RackState& state, double startTick) n
         // round 165)
         if (! state.eventLanes.empty() || ! state.liveAutomations.empty())
             applyPluginParams (state, std::min<int> ((int) song.automations.size(), RackState::maxAutomations), true);
+        else if (! activeMidiTargets.empty())
+            resetDrivenMidiControls (state);
         return;
     }
 
@@ -1827,8 +1890,51 @@ float RackRenderer::compensatedAutomation (const RackState& state, int automatio
                               std::max (0.0, compensateTick - lag * compensateTicksPerSample));
 }
 
+void RackRenderer::dispatchMidiControl (const RackState& state, int channel, int param, float v) noexcept
+{
+    NoteEvent e;
+    e.type = NoteEvent::Type::control;
+    e.channel = channel;
+    if (midictl::isPitchBend (param))
+    {
+        e.key = NoteEvent::controlPitchBend;
+        e.velocity = std::clamp (v, 0.0f, 1.0f) * 2.0f - 1.0f;
+    }
+    else if (midictl::isPressure (param))
+    {
+        e.key = NoteEvent::controlPressure;
+        e.velocity = std::clamp (v, 0.0f, 1.0f);
+    }
+    else if (midictl::isCc (param))
+    {
+        e.key = param - midictl::ccBase;
+        e.velocity = std::clamp (v, 0.0f, 1.0f);
+    }
+    else
+        return;
+    applyLiveControl (state, e);
+}
+
+void RackRenderer::resetDrivenMidiControls (const RackState& state) noexcept
+{
+    for (const auto& prev : activeMidiTargets)
+    {
+        if (prev.channel >= 0 && (std::size_t) prev.channel < channelMidi.size() && midictl::isMidiParam (prev.param))
+        {
+            channelMidi[(std::size_t) prev.channel].lastAutomated[(std::size_t) (prev.param - midictl::ccBase)] = std::numeric_limits<float>::quiet_NaN();
+            if (prev.channel < (int) state.instruments.size() && state.instruments[(std::size_t) prev.channel] != nullptr)
+                dispatchMidiControl (state, prev.channel, prev.param, neutralMidiValue (prev.param));
+        }
+    }
+    activeMidiTargets.clear();
+}
+
 void RackRenderer::applyPluginParams (const RackState& state, int firstSlot, bool andLive) noexcept
 {
+    const auto trackMidi = (firstSlot == 0 || andLive);
+    if (trackMidi)
+        seenMidiTargets.clear();
+
     for (const auto& b : state.pluginParams)
     {
         if (b.automation < firstSlot
@@ -1844,25 +1950,22 @@ void RackRenderer::applyPluginParams (const RackState& state, int firstSlot, boo
         {
             const auto kind = (std::size_t) b.channel < state.song.channels.size() ? state.song.channels[(std::size_t) b.channel].instrument
                                                                                     : InstrumentKind::plugin;
-            if (midictl::isPitchBend (b.param) && kind != InstrumentKind::plugin && kind != InstrumentKind::midiOut
-                && b.channel < (int) state.instruments.size() && b.channel < maxChannels)
+            if (midictl::isMidiParam (b.param) && kind != InstrumentKind::plugin
+                && b.channel < (int) state.instruments.size() && (std::size_t) b.channel < channelMidi.size())
             {
-                // LYNX's own instruments: the bend as the controller's wheel plays it (applyLiveControl), when it changes
-                if (! automatedBendReset)
+                if (trackMidi)
                 {
-                    automatedBend.fill (std::numeric_limits<float>::quiet_NaN());
-                    automatedBendReset = true;
+                    const auto dup = std::any_of (seenMidiTargets.begin(), seenMidiTargets.end(), [&] (const ActiveMidiTarget& a) {
+                        return a.channel == b.channel && a.param == b.param;
+                    });
+                    if (! dup)
+                        seenMidiTargets.push_back ({ b.channel, b.param });
                 }
-                auto& last = automatedBend[(std::size_t) b.channel];
+                auto& last = channelMidi[(std::size_t) b.channel].lastAutomated[(std::size_t) (b.param - midictl::ccBase)];
                 if (! (last == v) && state.instruments[(std::size_t) b.channel] != nullptr)
                 {
                     last = v;
-                    NoteEvent e;
-                    e.type = NoteEvent::Type::control;
-                    e.channel = b.channel;
-                    e.key = NoteEvent::controlPitchBend;
-                    e.velocity = std::clamp (v, 0.0f, 1.0f) * 2.0f - 1.0f;
-                    applyLiveControl (state, e);
+                    dispatchMidiControl (state, b.channel, b.param, v);
                 }
                 continue;
             }
@@ -1878,6 +1981,23 @@ void RackRenderer::applyPluginParams (const RackState& state, int firstSlot, boo
         {
             state.effects[(std::size_t) b.track][(std::size_t) b.slot]->setParameter (b.param, compensatedAutomation (state, b.automation, b.track, b.slot, v));
         }
+    }
+
+    if (trackMidi)
+    {
+        for (const auto& prev : activeMidiTargets)
+        {
+            const auto stillActive = std::any_of (seenMidiTargets.begin(), seenMidiTargets.end(), [&] (const ActiveMidiTarget& s) {
+                return s.channel == prev.channel && s.param == prev.param;
+            });
+            if (! stillActive && prev.channel >= 0 && (std::size_t) prev.channel < channelMidi.size() && midictl::isMidiParam (prev.param))
+            {
+                channelMidi[(std::size_t) prev.channel].lastAutomated[(std::size_t) (prev.param - midictl::ccBase)] = std::numeric_limits<float>::quiet_NaN();
+                if (prev.channel < (int) state.instruments.size() && state.instruments[(std::size_t) prev.channel] != nullptr)
+                    dispatchMidiControl (state, prev.channel, prev.param, neutralMidiValue (prev.param));
+            }
+        }
+        activeMidiTargets.assign (seenMidiTargets.begin(), seenMidiTargets.end());
     }
 }
 
@@ -1957,10 +2077,30 @@ void RackRenderer::renderChannel (const RackState& state, int i, int n) noexcept
     const auto automation = state.hasAutomation;
     const auto knobVolume = liveLevel (state, &LiveLevels::channelVolume, i, c.volume);
     const auto knobPan = liveLevel (state, &LiveLevels::channelPan, i, c.pan);
-    const auto volume = channelGain (automation ? automated (state.channelVolumeAuto[(std::size_t) i], knobVolume) : knobVolume);
-    const auto pan = automation ? automated (state.channelPanAuto[(std::size_t) i], (knobPan + 1.0f) * 0.5f) * 2.0f - 1.0f : knobPan;
+    auto volume = channelGain (automation ? automated (state.channelVolumeAuto[(std::size_t) i], knobVolume) : knobVolume);
+    auto pan = automation ? automated (state.channelPanAuto[(std::size_t) i], (knobPan + 1.0f) * 0.5f) * 2.0f - 1.0f : knobPan;
+    auto* cmPtr = (std::size_t) i < channelMidi.size() ? &channelMidi[(std::size_t) i] : nullptr;
+    if (cmPtr != nullptr && usesRackGainPan (c.instrument))
+    {
+        volume *= cmPtr->ccVolume * cmPtr->ccVolume * cmPtr->ccExpression * cmPtr->ccExpression * cmPtr->ccBreath * cmPtr->ccBreath;
+        pan = std::clamp (pan + cmPtr->ccPan + cmPtr->ccBalance, -1.0f, 1.0f);
+    }
     float gl = 0.0f, gr = 0.0f;
     panGains (pan, volume, gl, gr);
+
+    float vibCents = 0.0f;
+    if (cmPtr != nullptr && usesRackVibrato (c.instrument))
+    {
+        const auto depth = (cmPtr->ccModWheel + cmPtr->ccPressure) * 50.0f;
+        if (depth > 0.0f)
+        {
+            vibCents = depth * (float) std::sin (6.283185307179586 * cmPtr->vibPhase);
+            cmPtr->vibPhase += 6.0 * (double) n / std::max (1.0, sampleRate);
+            cmPtr->vibPhase -= std::floor (cmPtr->vibPhase);
+        }
+        else
+            cmPtr->vibPhase = 0.0;
+    }
 
     auto* l = channelBuffer (i, 0);
     auto* r = channelBuffer (i, 1);
@@ -1973,7 +2113,7 @@ void RackRenderer::renderChannel (const RackState& state, int i, int n) noexcept
     // issue #14: the channel's pitch as it is now (a hosted plugin bends to it; native engines took it at note on)
     // (round 167a: the native generators move their sounding notes with it, as FL's do)
     // (round 173d: + the controller's pitch wheel, which FL's generators follow through the channel's pitch)
-    instrument.setChannelPitchNow (c.sampler.pitch * 100.0f, c.misc.fineTune + (c.misc.mainPitch ? state.song.masterPitch : 0.0f) + instrument.wheelCents());
+    instrument.setChannelPitchNow (c.sampler.pitch * 100.0f, c.misc.fineTune + (c.misc.mainPitch ? state.song.masterPitch : 0.0f) + instrument.wheelCents() + vibCents);
     if (c.instrument == InstrumentKind::patcher) // its Hardware Insert nodes: this chunk's device buses (round 165c)
         instrument.setHardwareIo (liveInput, hwOut != nullptr && hwOut->active.load (std::memory_order_relaxed) ? hwOut : nullptr, liveInputOffset);
 
@@ -2121,7 +2261,16 @@ void RackRenderer::renderChannel (const RackState& state, int i, int n) noexcept
             if (! c.muted && inRegion)
             {
                 // (an audio clip follows its fine tune, not the main pitch: LYNX never moved clips with it)
-                const auto noteCents = e.cents + c.misc.fineTune + instrument.wheelCents()
+                if (cmPtr != nullptr && usesRackSustain (c.instrument) && e.key >= 0 && e.key < 128)
+                {
+                    if ((cmPtr->sustainHeld[(std::size_t) (e.key >> 6)] & bit) != 0)
+                    {
+                        instrument.noteOff (e.key);
+                        voiceOrders[(std::size_t) i].noteOff (e.key);
+                        cmPtr->sustainHeld[(std::size_t) (e.key >> 6)] &= ~bit;
+                    }
+                }
+                const auto noteCents = e.cents + c.misc.fineTune + instrument.wheelCents() + vibCents
                                        + (c.misc.mainPitch && c.instrument != InstrumentKind::audioClip ? state.song.masterPitch : 0.0f);
                 // FL's channel Mono / Porta (round 168l): a Mono note over a held one moves the sounding voice instead
                 const auto mode = polyMode (c, instrument);
@@ -2179,6 +2328,8 @@ void RackRenderer::renderChannel (const RackState& state, int i, int n) noexcept
         {
             instrument.cut(); // short fade, like FL's "cut"
             held = {};
+            if (cmPtr != nullptr)
+                cmPtr->sustainHeld = {};
             voiceOrders[(std::size_t) i].clear();
             polyLayers[(std::size_t) i].clear();
         }
@@ -2193,8 +2344,13 @@ void RackRenderer::renderChannel (const RackState& state, int i, int n) noexcept
                                     (float) (channelpoly::glideBeats (mode.portaBeats) * ppq / std::max (1.0e-9, chunkTps)));
             if (off.release >= 0)
             {
-                instrument.noteOff (off.release);
-                voiceOrders[(std::size_t) i].noteOff (off.release);
+                if (cmPtr != nullptr && usesRackSustain (c.instrument) && cmPtr->sustainPedal != 0 && off.release < 128)
+                    cmPtr->sustainHeld[(std::size_t) (off.release >> 6)] |= (std::uint64_t { 1 } << (off.release & 63));
+                else
+                {
+                    instrument.noteOff (off.release);
+                    voiceOrders[(std::size_t) i].noteOff (off.release);
+                }
             }
             if (e.key >= 0 && e.key < 128)
                 held[(std::size_t) (e.key >> 6)] &= ~bit;
@@ -2203,6 +2359,46 @@ void RackRenderer::renderChannel (const RackState& state, int i, int n) noexcept
 
     if (position < n)
         instrument.render (l + position, r + position, n - position, gl, gr);
+
+    if (cmPtr != nullptr && usesRackFilter (c.instrument))
+    {
+        if (cmPtr->ccCutoff < 0.995f || cmPtr->ccResonance > 0.005f)
+        {
+            const auto fc = std::clamp (20000.0f * std::pow (0.002f, 1.0f - cmPtr->ccCutoff), 25.0f, (float) (sampleRate * 0.45));
+            const auto res = std::clamp (cmPtr->ccResonance * 0.92f, 0.0f, 0.92f);
+            if (cmPtr->svfFc < 0.0f)
+                cmPtr->svfLowL = cmPtr->svfBandL = cmPtr->svfLowR = cmPtr->svfBandR = 0.0f;
+            if (fc != cmPtr->svfFc || res != cmPtr->svfRes)
+            {
+                cmPtr->svfFc = fc;
+                cmPtr->svfRes = res;
+                const auto g = (float) std::tan (3.14159265358979 * (double) fc / std::max (1.0, sampleRate));
+                cmPtr->svfK = 2.0f - 1.9f * res;
+                cmPtr->svfA1 = 1.0f / (1.0f + g * (g + cmPtr->svfK));
+                cmPtr->svfA2 = g * cmPtr->svfA1;
+                cmPtr->svfA3 = g * cmPtr->svfA2;
+            }
+            const auto a1 = cmPtr->svfA1, a2 = cmPtr->svfA2, a3 = cmPtr->svfA3;
+            for (int s = 0; s < n; ++s)
+            {
+                const auto v3L = l[s] - cmPtr->svfLowL;
+                const auto v1L = a1 * cmPtr->svfBandL + a2 * v3L;
+                const auto v2L = cmPtr->svfLowL + a2 * cmPtr->svfBandL + a3 * v3L;
+                cmPtr->svfBandL = 2.0f * v1L - cmPtr->svfBandL;
+                cmPtr->svfLowL = 2.0f * v2L - cmPtr->svfLowL;
+                l[s] = v2L;
+
+                const auto v3R = r[s] - cmPtr->svfLowR;
+                const auto v1R = a1 * cmPtr->svfBandR + a2 * v3R;
+                const auto v2R = cmPtr->svfLowR + a2 * cmPtr->svfBandR + a3 * v3R;
+                cmPtr->svfBandR = 2.0f * v1R - cmPtr->svfBandR;
+                cmPtr->svfLowR = 2.0f * v2R - cmPtr->svfLowR;
+                r[s] = v2R;
+            }
+        }
+        else
+            cmPtr->svfFc = -1.0f;
+    }
 
     // PDC: this channel arrives before the track's others; delay until aligned
     if ((std::size_t) i < state.channelDelays.size() && state.channelDelays[(std::size_t) i] != nullptr)
@@ -2577,6 +2773,8 @@ void RackRenderer::process (const RackState* state,
             heldScratch[c] = heldNotes[c];
             if (c < polyLayers.size() && c < polyScratch.size())
                 polyScratch[c] = polyLayers[c];
+            if (c < channelMidi.size() && c < channelMidiScratch.size())
+                channelMidiScratch[c] = channelMidi[c];
         }
         for (std::size_t c = 0; c < (std::size_t) maxChannels; ++c)
         {
@@ -2585,9 +2783,22 @@ void RackRenderer::process (const RackState* state,
             heldNotes[c] = from >= 0 && from < maxChannels ? heldScratch[(std::size_t) from] : NoteMask {};
             if (c < polyLayers.size() && c < polyScratch.size()) // (round 168l's mono / porta layers move too)
                 polyLayers[c] = from >= 0 && (std::size_t) from < polyScratch.size() ? polyScratch[(std::size_t) from] : channelpoly::Layer {};
+            if (c < channelMidi.size() && c < channelMidiScratch.size())
+            {
+                if (from >= 0 && (std::size_t) from < channelMidiScratch.size())
+                {
+                    channelMidi[c] = channelMidiScratch[(std::size_t) from];
+                    channelMidi[c].lastAutomated.fill (std::numeric_limits<float>::quiet_NaN());
+                }
+                else
+                    resetChannelMidiState ((int) c, true);
+            }
         }
+        activeMidiTargets.clear();
         scheduledNotes->moveChannels (state->channelFrom); // (round 169d)
     }
+    if (state != lastState)
+        automationValues.fill (std::numeric_limits<float>::quiet_NaN());
     lastState = state; // so prepare() knows which instruments to reconfigure
     lastSerial = state->serial;
 
@@ -2620,6 +2831,14 @@ void RackRenderer::process (const RackState* state,
                 instrument->transportStopped(); // (a hosted plugin: FL's "Send All Notes Off when playback stops")
         heldNotes.fill ({});
         clearPolyLayers();
+        for (auto& cm : channelMidi)
+        {
+            cm.sustainPedal = 0;
+            cm.sustainHeld = {};
+            cm.lastAutomated.fill (std::numeric_limits<float>::quiet_NaN());
+        }
+        if (wasPlaying && ! playing)
+            resetDrivenMidiControls (*state);
 
         for (auto& arp : state->arpeggiators)
             if (arp != nullptr)
@@ -2697,6 +2916,9 @@ void RackRenderer::process (const RackState* state,
                     if (instrument != nullptr)
                         instrument->panic();
                 heldNotes.fill ({});
+                for (int c = 0; c < (int) channelMidi.size(); ++c)
+                    resetChannelMidiState (c, false);
+                activeMidiTargets.clear();
                 for (auto& order : voiceOrders)
                     order.clear();
                 clearPolyLayers();
@@ -2750,8 +2972,16 @@ void RackRenderer::process (const RackState* state,
                 continue; // outside the channel's key region (round 164)
             const auto& def = state->song.channels;
             auto& poly = polyLayers[(std::size_t) std::min (e.channel, maxChannels - 1)];
+            auto* liveCm = (std::size_t) e.channel < channelMidi.size() ? &channelMidi[(std::size_t) e.channel] : nullptr;
+            const auto liveKind = (std::size_t) e.channel < def.size() ? def[(std::size_t) e.channel].instrument : InstrumentKind::plugin;
             if (e.type == NoteEvent::Type::on)
             {
+                if (liveCm != nullptr && usesRackSustain (liveKind) && inRange && (liveCm->sustainHeld[(std::size_t) (e.key >> 6)] & bit) != 0)
+                {
+                    order.noteOff (e.key);
+                    instrument.noteOff (e.key);
+                    liveCm->sustainHeld[(std::size_t) (e.key >> 6)] &= ~bit;
+                }
                 if (inRange)
                 {
                     held[(std::size_t) (e.key >> 6)] |= bit;
@@ -2806,8 +3036,13 @@ void RackRenderer::process (const RackState* state,
                     instrument.slideTo (off.key, off.cents, (float) (channelpoly::glideBeats (mode.portaBeats) * ppq / std::max (1.0e-9, tps)));
                 if (off.release >= 0)
                 {
-                    order.noteOff (off.release);
-                    instrument.noteOff (off.release);
+                    if (liveCm != nullptr && usesRackSustain (liveKind) && liveCm->sustainPedal != 0 && off.release < 128)
+                        liveCm->sustainHeld[(std::size_t) (off.release >> 6)] |= (std::uint64_t { 1 } << (off.release & 63));
+                    else
+                    {
+                        order.noteOff (off.release);
+                        instrument.noteOff (off.release);
+                    }
                 }
             }
         }
@@ -2926,6 +3161,124 @@ double RackRenderer::ticksToNextEvent (const RackState& state, double tick) noex
     return best;
 }
 
+void RackRenderer::resetChannelMidiState (int channel, bool clearLastAutomated) noexcept
+{
+    if (channel < 0 || (std::size_t) channel >= channelMidi.size())
+        return;
+    auto& cm = channelMidi[(std::size_t) channel];
+    cm.ccVolume = 1.0f;
+    cm.ccExpression = 1.0f;
+    cm.ccBreath = 1.0f;
+    cm.ccPan = 0.0f;
+    cm.ccBalance = 0.0f;
+    cm.ccModWheel = 0.0f;
+    cm.ccPressure = 0.0f;
+    cm.ccCutoff = 1.0f;
+    cm.ccResonance = 0.0f;
+    cm.vibPhase = 0.0;
+    cm.sustainPedal = 0;
+    cm.sustainHeld = {};
+    cm.svfFc = -1.0f;
+    cm.svfRes = -1.0f;
+    cm.svfLowL = cm.svfBandL = cm.svfLowR = cm.svfBandR = 0.0f;
+    if (clearLastAutomated)
+        cm.lastAutomated.fill (std::numeric_limits<float>::quiet_NaN());
+}
+
+void RackRenderer::releaseSustainNotes (const RackState& state, int channel) noexcept
+{
+    if (channel < 0 || (std::size_t) channel >= channelMidi.size() || (std::size_t) channel >= state.instruments.size())
+        return;
+    auto* instrument = state.instruments[(std::size_t) channel].get();
+    auto& cm = channelMidi[(std::size_t) channel];
+    if (instrument == nullptr)
+    {
+        cm.sustainHeld = {};
+        return;
+    }
+    const auto heldMask = (std::size_t) channel < heldNotes.size() ? heldNotes[(std::size_t) channel] : NoteMask {};
+    for (int k = 0; k < 128; ++k)
+    {
+        const auto word = (std::size_t) (k >> 6);
+        const auto bit = std::uint64_t { 1 } << (k & 63);
+        if ((cm.sustainHeld[word] & bit) != 0 && (heldMask[word] & bit) == 0)
+        {
+            instrument->noteOff (k);
+            if ((std::size_t) channel < voiceOrders.size())
+                voiceOrders[(std::size_t) channel].noteOff (k);
+        }
+    }
+    cm.sustainHeld = {};
+}
+
+void RackRenderer::recordChannelMidiControl (const RackState& state, int channel, int keyOrType, float value) noexcept
+{
+    if (channel < 0 || (std::size_t) channel >= channelMidi.size())
+        return;
+    auto& cm = channelMidi[(std::size_t) channel];
+    const auto kind = (std::size_t) channel < state.song.channels.size() ? state.song.channels[(std::size_t) channel].instrument
+                                                                        : InstrumentKind::plugin;
+    if (keyOrType == NoteEvent::controlPressure)
+    {
+        cm.ccPressure = std::clamp (value, 0.0f, 1.0f);
+        return;
+    }
+    if (keyOrType < 0 || keyOrType >= 128)
+        return;
+    const auto v = std::clamp (value, 0.0f, 1.0f);
+    switch (keyOrType)
+    {
+        case 1: cm.ccModWheel = v; break;
+        case 2: cm.ccBreath = v; break;
+        case 7: cm.ccVolume = v; break;
+        case 8:
+            cm.ccBalance = (std::abs (v - 0.5f) < 0.0045f || std::abs (v - 64.0f / 127.0f) < 0.0045f) ? 0.0f : std::clamp (v * 2.0f - 1.0f, -1.0f, 1.0f);
+            break;
+        case 10:
+            cm.ccPan = (std::abs (v - 0.5f) < 0.0045f || std::abs (v - 64.0f / 127.0f) < 0.0045f) ? 0.0f : std::clamp (v * 2.0f - 1.0f, -1.0f, 1.0f);
+            break;
+        case 11: cm.ccExpression = v; break;
+        case 64:
+        {
+            const auto prev = cm.sustainPedal;
+            if (v >= 0.5f)
+                cm.sustainPedal |= 1;
+            else
+                cm.sustainPedal &= (std::uint8_t) ~1;
+            if (prev != 0 && cm.sustainPedal == 0 && usesRackSustain (kind))
+                releaseSustainNotes (state, channel);
+            break;
+        }
+        case 69:
+        {
+            const auto prev = cm.sustainPedal;
+            if (v >= 0.5f)
+                cm.sustainPedal |= 2;
+            else
+                cm.sustainPedal &= (std::uint8_t) ~2;
+            if (prev != 0 && cm.sustainPedal == 0 && usesRackSustain (kind))
+                releaseSustainNotes (state, channel);
+            break;
+        }
+        case 71: cm.ccResonance = v; break;
+        case 74: cm.ccCutoff = v; break;
+        case 120: // all sound off
+        case 123: // all notes off
+            cm.sustainHeld = {};
+            if ((std::size_t) channel < state.instruments.size() && state.instruments[(std::size_t) channel] != nullptr)
+                state.instruments[(std::size_t) channel]->allNotesOff();
+            break;
+        case 121: // reset all controllers
+            if (cm.sustainPedal != 0 && usesRackSustain (kind))
+                releaseSustainNotes (state, channel);
+            resetChannelMidiState (channel, false);
+            if ((std::size_t) channel < state.instruments.size() && state.instruments[(std::size_t) channel] != nullptr)
+                state.instruments[(std::size_t) channel]->pitchBend (0.0f);
+            break;
+        default: break;
+    }
+}
+
 void RackRenderer::applyLiveControl (const RackState& state, const NoteEvent& e) noexcept
 {
     // a controller's pitch wheel, mod wheel (CC 1), other CCs and channel pressure played into a channel (round 162,
@@ -2958,6 +3311,7 @@ void RackRenderer::applyLiveControl (const RackState& state, const NoteEvent& e)
     else
         return;
 
+    recordChannelMidiControl (state, e.channel, e.key, value);
     instrument->midiMessage (m, size);
     if (e.key == NoteEvent::controlPitchBend)
     {
@@ -2981,6 +3335,18 @@ void RackRenderer::applyLiveControl (const RackState& state, const NoteEvent& e)
             {
                 std::uint8_t routed[3] { (std::uint8_t) ((m[0] & 0xF0) | (state.midiOutChannel[(std::size_t) e.channel] & 15)), m[1], m[2] };
                 state.instruments[(std::size_t) t]->midiMessage (routed, size);
+                const auto tk = (std::size_t) t < state.song.channels.size() ? state.song.channels[(std::size_t) t].instrument : InstrumentKind::plugin;
+                if (tk != InstrumentKind::plugin)
+                {
+                    recordChannelMidiControl (state, t, e.key, value);
+                    if (e.key == NoteEvent::controlPitchBend)
+                    {
+                        const auto range = (std::size_t) t < state.song.channels.size() ? state.song.channels[(std::size_t) t].misc.pitchRange : 2;
+                        state.instruments[(std::size_t) t]->pitchBend (std::clamp (value, -1.0f, 1.0f) * (float) std::max (0, range));
+                    }
+                    else if (e.key < 128)
+                        state.instruments[(std::size_t) t]->controlChange (e.key, std::clamp (value, 0.0f, 1.0f));
+                }
             }
 }
 
@@ -3160,6 +3526,8 @@ void RackRenderer::processChunk (const RackState& state, bool playing, double st
 
     if (state.hasAutomation) // (a hair later: a chunk that starts on a pattern event's sample takes its value)
         updateAutomation (state, startTick + 1.0e-6);
+    else if (! activeMidiTargets.empty())
+        resetDrivenMidiControls (state);
 
     chunkTps = ticksPerSample (bpm, sampleRate);
     chunkStartTick = playing ? startTick : liveTick; // stopped: live notes' arpeggios run on their own clock

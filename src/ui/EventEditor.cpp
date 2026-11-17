@@ -26,7 +26,8 @@ bool sameTarget (const AutomationTarget& a, const AutomationTarget& b) noexcept
 bool bipolarTarget (const AutomationTarget& t) noexcept
 {
     return t.kind == AutomationTargetKind::channelPan || t.kind == AutomationTargetKind::mixerPan
-        || ((t.kind == AutomationTargetKind::channelParam || t.kind == AutomationTargetKind::effectParam) && midictl::isPitchBend (t.param));
+        || ((t.kind == AutomationTargetKind::channelParam || t.kind == AutomationTargetKind::effectParam)
+            && (midictl::isPitchBend (t.param) || t.param == midictl::ccBase + 10 || t.param == midictl::ccBase + 8));
 }
 
 class EventEditor final : public juce::Component,
