@@ -1083,6 +1083,12 @@ public:
             }
     }
 
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop == 1 && std::isfinite (value))
+            for (auto& v : voices)
+                if (v.active && ! v.released && v.key == key) { v.slideCents = value; v.slideLeft = 0; }
+    }
     void pitchBend (float) noexcept override {} // (it bends by the raw MIDI pitch bend, midiMessage)
 
     void midiMessage (const std::uint8_t* m, int size) noexcept override

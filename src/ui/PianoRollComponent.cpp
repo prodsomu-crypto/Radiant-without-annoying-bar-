@@ -282,6 +282,11 @@ PianoRollComponent::PianoRollComponent (AudioEngine& e)
     slideButton.setIconColourWhenOn (theme::colour::accent);
     slideButton.setFlat (true);
     addAndMakeVisible (slideButton);
+    mpePitchButton.setClickingTogglesState (true); mpePitchButton.setFlat (false);
+    mpePitchButton.setOnColour (theme::colour::accent); mpePitchButton.setIconColourWhenOn (theme::colour::onAccent);
+    mpePitchButton.setTooltip (tr ("MPE Pitch mode: edit per-note pitch glide curves"));
+    mpePitchButton.onClick = [this] { mpePitchMode = mpePitchButton.getToggleState(); repaint(); };
+    addAndMakeVisible (mpePitchButton);
     ui::setQuickTip (chordBox, tr ("Chord stamp"));
     ui::setQuickTip (scaleBox, tr ("Scale"));
     chordBox.iconLit = [this] { return chordBox.getSelectedId() > 1; };
@@ -511,7 +516,8 @@ void PianoRollComponent::resized()
     place (pasteButton, compactBar ? h : pasteButton.getIdealWidth (h));
     place (channelBox, compactBar ? 104 : 150);
     place (tools, tools.getIdealWidth (h));
-    place (snapBox, compactBar ? 92 : 128);
+    place (mpePitchButton, 44);
+    place (snapBox, 64);
     place (ghostButton, h);
     place (followButton, h);
     place (slideButton, h, true);
@@ -964,11 +970,37 @@ void PianoRollComponent::paint (juce::Graphics& g)
                 g.fillPath (arrow);
             }
 
-            if (gesture::noteLabelFits (r.getWidth(), rowHeight)) // the note's name, readable on its colour
+            if (gesture::noteLabelFits (r.getWidth(), rowHeight))
             {
                 g.setColour (fill.getPerceivedBrightness() > 0.55f ? bg0.withAlpha (0.85f) : textPrimary.withAlpha (0.9f));
                 g.setFont (theme::font (gesture::labelHeight (rowHeight) - 1.0f));
                 textcache::drawText (g, keyName (n.key), r.reduced (n.slide || n.porta ? 11.0f : 4.0f, 0.0f), juce::Justification::centredLeft, true);
+            }
+        }
+        for (int i = 0; i < (int) pattern.notes.size(); ++i)
+        {
+            const auto& n = pattern.notes[(std::size_t) i];
+            if (! edits (n) || ! rows.shown (n.key) || n.slide) continue;
+            const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+            if (x0 + nw < (float) grid.getX() || x0 > (float) grid.getRight()) continue;
+            const auto baseY = (float) keyToY (n.key) + (float) rowHeight * 0.5f;
+            g.setColour (mpePitchMode ? accentHover : textPrimary.withAlpha (n.pitchCurve.empty() ? 0.35f : 0.78f));
+            if (n.pitchCurve.empty()) g.drawLine (x0 + 1.0f, baseY, x0 + nw - 1.0f, baseY, mpePitchMode ? 1.6f : 1.1f);
+            else
+            {
+                juce::Path pth;
+                auto ySt = [&] (float st) { return baseY - st * (float) rowHeight; };
+                pth.startNewSubPath (x0, ySt (evalPitchCurveCents (n.pitchCurve, 0.0) * 0.01f));
+                for (const auto& pt : n.pitchCurve) pth.lineTo (x0 + (float) pt.frac * nw, ySt (pt.semitones));
+                pth.lineTo (x0 + nw, ySt (evalPitchCurveCents (n.pitchCurve, 1.0) * 0.01f));
+                g.strokePath (pth, juce::PathStrokeType (mpePitchMode ? 2.2f : 1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                if (mpePitchMode) for (int pi = 0; pi < (int) n.pitchCurve.size(); ++pi)
+                {
+                    const auto px = x0 + (float) n.pitchCurve[(std::size_t) pi].frac * nw, py = ySt (n.pitchCurve[(std::size_t) pi].semitones);
+                    const auto act = (i == mpeNote && pi == mpePoint);
+                    g.setColour (act ? textPrimary : accent);
+                    g.fillEllipse (px - (act ? 5.0f : 3.5f), py - (act ? 5.0f : 3.5f), act ? 10.0f : 7.0f, act ? 10.0f : 7.0f);
+                }
             }
         }
 
@@ -1000,8 +1032,7 @@ void PianoRollComponent::paint (juce::Graphics& g)
             g.drawRect (rubberBand);
         }
 
-        creatingNote = false;
-    if (drag == Drag::knife)
+        if (drag == Drag::knife)
         {
             juce::Path cut;
             cut.startNewSubPath (knifeFrom.toFloat());
@@ -1660,6 +1691,72 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     auto hit = noteAt (e.x, e.y, rightEdge, leftEdge);
     const auto tool = tools.getTool();
 
+    if (mpePitchMode && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+    {
+        const auto& notes = currentPattern (engine.getSong()).notes;
+        int bestN = -1, bestP = -1;
+        float bestD = e.source.isTouch() ? 26.0f : 14.0f;
+        for (int i = (int) notes.size() - 1; i >= 0; --i)
+        {
+            const auto& n = notes[(std::size_t) i];
+            if (! edits (n) || ! rows.shown (n.key) || n.slide) continue;
+            const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+            if ((float) e.x < x0 - 10.0f || (float) e.x > x0 + nw + 10.0f) continue;
+            const auto baseY = (float) keyToY (n.key) + (float) rowHeight * 0.5f;
+            for (int pi = 0; pi < (int) n.pitchCurve.size(); ++pi)
+            {
+                const auto d = std::hypot ((float) e.x - (x0 + (float) n.pitchCurve[(std::size_t) pi].frac * nw),
+                                           (float) e.y - (baseY - n.pitchCurve[(std::size_t) pi].semitones * (float) rowHeight));
+                if (d < bestD) { bestD = d; bestN = i; bestP = pi; }
+            }
+            if (bestP < 0)
+            {
+                const auto f = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
+                const auto d = std::abs ((float) e.y - (baseY - (evalPitchCurveCents (n.pitchCurve, f) * 0.01f) * (float) rowHeight));
+                if (d < bestD) { bestD = d; bestN = i; bestP = -1; }
+            }
+        }
+        if (bestN >= 0)
+        {
+            const auto nowMs = juce::Time::getMillisecondCounter();
+            if (bestP >= 0 && (nowMs - mpeLastTapMs) < 380 && e.getPosition().getDistanceFrom (mpeLastTapPos) < 22)
+            {
+                mpeLastTapMs = 0;
+                editNotes ([bestN, bestP] (Pattern& pat) {
+                    if (bestN < (int) pat.notes.size())
+                    {
+                        auto& c = pat.notes[(std::size_t) bestN].pitchCurve;
+                        if (bestP < (int) c.size()) c.erase (c.begin() + bestP);
+                        if (c.size() <= 1) c.clear();
+                    }
+                });
+                repaint();
+                return;
+            }
+            mpeLastTapMs = nowMs; mpeLastTapPos = e.getPosition();
+            drag = Drag::mpePitch; mpeNote = bestN; mpePoint = bestP; mpeDrawing = false; mpeLastFrac = -1.0;
+            editNotes ([this, pos = e.getPosition(), snapS = ! e.mods.isAltDown()] (Pattern& pat) {
+                if (mpeNote < 0 || mpeNote >= (int) pat.notes.size()) return;
+                auto& n = pat.notes[(std::size_t) mpeNote];
+                const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+                const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) pos.x - x0) / (double) nw);
+                float st = juce::jlimit (-24.0f, 24.0f, ((float) keyToY (n.key) + (float) rowHeight * 0.5f - (float) pos.y) / (float) rowHeight);
+                if (snapS && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
+                if (mpePoint < 0)
+                {
+                    if (n.pitchCurve.empty()) { if (frac > 0.04) n.pitchCurve.push_back ({ 0.0, 0.0f }); n.pitchCurve.push_back ({ frac, st }); if (frac < 0.96) n.pitchCurve.push_back ({ 1.0, 0.0f }); }
+                    else n.pitchCurve.push_back ({ frac, st });
+                    std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    for (int k = 0; k < (int) n.pitchCurve.size(); ++k) if (std::abs (n.pitchCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
+                    mpeLastFrac = frac;
+                }
+                else if (mpePoint < (int) n.pitchCurve.size()) n.pitchCurve[(std::size_t) mpePoint].semitones = st;
+            }, true);
+            repaint();
+            return;
+        }
+    }
+
     // Touch double-tap on a note deletes it cleanly
     if (e.source.isTouch() && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
     {
@@ -2190,6 +2287,70 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
             drumPaintAt (e.getPosition(), snapOn);
             return;
 
+        case Drag::mpePitch:
+        {
+            editNotes ([this, e, snapOn] (Pattern& pat) {
+                if (mpeNote < 0 || mpeNote >= (int) pat.notes.size()) return;
+                auto& n = pat.notes[(std::size_t) mpeNote];
+                const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+                const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
+                float st = juce::jlimit (-24.0f, 24.0f, ((float) keyToY (n.key) + (float) rowHeight * 0.5f - (float) e.y) / (float) rowHeight);
+                if (snapOn && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
+                if (mpeDrawing || (mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12))
+                {
+                    mpeDrawing = true;
+                    const auto lo = std::min (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
+                    const auto hi = std::max (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
+                    n.pitchCurve.erase (std::remove_if (n.pitchCurve.begin(), n.pitchCurve.end(),
+                        [lo, hi] (const NotePitchPoint& pt) { return pt.frac > lo + 0.005 && pt.frac < hi - 0.005; }), n.pitchCurve.end());
+                    n.pitchCurve.push_back ({ frac, st });
+                    std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    mpeLastFrac = frac; mpePoint = -1;
+                }
+                else if (mpePoint >= 0 && mpePoint < (int) n.pitchCurve.size())
+                {
+                    n.pitchCurve[(std::size_t) mpePoint].frac = frac;
+                    n.pitchCurve[(std::size_t) mpePoint].semitones = st;
+                    std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    for (int k = 0; k < (int) n.pitchCurve.size(); ++k) if (std::abs (n.pitchCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
+                }
+            }, false);
+            repaint();
+            return;
+        }
+
+        case Drag::mpePitch:
+        {
+            editNotes ([this, e, snapOn] (Pattern& pat) {
+                if (mpeNote < 0 || mpeNote >= (int) pat.notes.size()) return;
+                auto& n = pat.notes[(std::size_t) mpeNote];
+                const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+                const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
+                float st = juce::jlimit (-24.0f, 24.0f, ((float) keyToY (n.key) + (float) rowHeight * 0.5f - (float) e.y) / (float) rowHeight);
+                if (snapOn && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
+                if (mpeDrawing || (mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12))
+                {
+                    mpeDrawing = true;
+                    const auto lo = std::min (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
+                    const auto hi = std::max (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
+                    n.pitchCurve.erase (std::remove_if (n.pitchCurve.begin(), n.pitchCurve.end(),
+                        [lo, hi] (const NotePitchPoint& pt) { return pt.frac > lo + 0.005 && pt.frac < hi - 0.005; }), n.pitchCurve.end());
+                    n.pitchCurve.push_back ({ frac, st });
+                    std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    mpeLastFrac = frac; mpePoint = -1;
+                }
+                else if (mpePoint >= 0 && mpePoint < (int) n.pitchCurve.size())
+                {
+                    n.pitchCurve[(std::size_t) mpePoint].frac = frac;
+                    n.pitchCurve[(std::size_t) mpePoint].semitones = st;
+                    std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    for (int k = 0; k < (int) n.pitchCurve.size(); ++k) if (std::abs (n.pitchCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
+                }
+            }, false);
+            repaint();
+            return;
+        }
+
         case Drag::stretch:
         {
             if (dragOriginals.empty() || stretchEnd <= stretchAnchor)
@@ -2457,6 +2618,9 @@ void PianoRollComponent::mouseUp (const juce::MouseEvent& e)
         sortNotes();
 
     previewOff();
+    creatingNote = false;
+    mpeNote = mpePoint = -1;
+    mpeDrawing = false;
     drag = Drag::none;
     dragNote = -1;
     dragIndices.clear();

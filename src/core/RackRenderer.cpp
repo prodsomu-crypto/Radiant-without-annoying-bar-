@@ -2238,8 +2238,14 @@ void RackRenderer::renderChannel (const RackState& state, int i, int n) noexcept
             }
             continue;
         }
-        if (e.port >= 0 || e.type == NoteEvent::Type::voiceProp) // (what this channel sends out on a port is for the others)
+        if (e.port >= 0)
             continue;
+        if (e.type == NoteEvent::Type::voiceProp) {
+            if (e.sampleOffset > position) { instrument.render (l + position, r + position, e.sampleOffset - position, gl, gr); position = e.sampleOffset; }
+            if (instrument.hasVoicePitch() || e.prop != 1) instrument.voiceProperty (e.key, e.prop, e.velocity);
+            else instrument.slideTo (e.key, e.velocity + c.misc.fineTune + instrument.wheelCents() + vibCents + (c.misc.mainPitch && c.instrument != InstrumentKind::audioClip ? state.song.masterPitch : 0.0f), 1.0f);
+            continue;
+        }
 
         if (e.sampleOffset > position)
         {

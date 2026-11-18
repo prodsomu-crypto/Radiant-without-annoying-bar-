@@ -961,6 +961,7 @@ public:
     }
 
     // a VFX changes a sounding note (round 164b): its fine pitch, pan or volume
+    bool hasVoicePitch() const noexcept override { return true; }
     void voiceProperty (int key, int prop, float value) noexcept override
     {
         if (! std::isfinite (value))
@@ -2139,6 +2140,7 @@ public:
     }
 
     // a VFX changes a sounding note (round 164b): its fine pitch, pan or volume
+    bool hasVoicePitch() const noexcept override { return true; }
     void voiceProperty (int key, int prop, float value) noexcept override
     {
         if (! std::isfinite (value))

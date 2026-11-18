@@ -165,7 +165,7 @@ public:
 
 private:
     enum class Drag { none, move, resize, resizeLeft, erase, keyboard, select, velocity, velocityLine, velocitySet, paint, muting, knife,
-                      zoomRange, listen, pan, keyZoom, timeZoom, keySelect, rulerSelect, seek, drumPaint, stretch, eventDraw, eventErase, laneResize };
+                      zoomRange, listen, pan, keyZoom, timeZoom, keySelect, rulerSelect, seek, drumPaint, stretch, eventDraw, eventErase, laneResize, mpePitch };
 
     // Channel selector: the wheel steps through the channels with notes (Ctrl+wheel: all channels).
     class ChannelBox final : public juce::ComboBox
@@ -261,7 +261,8 @@ private:
     void quantizeOperation (int kind); // 0 = starts, 1 = starts and lengths (quick quantize), 2 = starts 50% toward the grid
     juce::ComboBox laneBox; // what the bottom lane edits: velocity, pan or fine pitch
     IconComboBox chordBox { Icon::chord }; // chord created on each click (like FL's "stamp")
-    IconButton slideButton { "slide", Icon::slide }; // new notes slide (like FL's slide tool)
+    IconButton slideButton { "slide", Icon::slide };
+    IconButton mpePitchButton { "mpePitch", Icon::none, "MPE" }; // new notes slide (like FL's slide tool)
     IconComboBox scaleBox { Icon::keyboard }; // scale highlighted on the keyboard rows
     // note colour groups (FL's 16 note colours; REA round 153): new notes get `noteColour`; the swatch opens a menu
     // that picks it, colours the selection and selects by colour
@@ -391,6 +392,11 @@ private:
     bool startedOnEmpty = false, erasedSomething = false, holdExpired = false;
     bool touchCreatedNote = false;
     bool creatingNote = false;
+    bool mpePitchMode = false, mpeDrawing = false;
+    int mpeNote = -1, mpePoint = -1;
+    double mpeLastFrac = -1.0;
+    juce::uint32 mpeLastTapMs = 0;
+    juce::Point<int> mpeLastTapPos;
     double rowHeightFloat = 14.0;
     juce::uint32 lastTouchTapMs = 0;
     juce::Point<int> lastTouchTapPos;

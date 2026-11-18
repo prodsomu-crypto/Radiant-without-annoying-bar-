@@ -1084,6 +1084,19 @@ struct MixerTrack
 
 constexpr float maxTrackLatencyMs = 5000.0f; // FL's clamp (FUN_012a7230)
 
+struct NotePitchPoint { double frac = 0.0; float semitones = 0.0f; bool operator== (const NotePitchPoint&) const = default; };
+inline float evalPitchCurveCents (const std::vector<NotePitchPoint>& curve, double frac) noexcept {
+    if (curve.empty()) return 0.0f;
+    if (frac <= curve.front().frac) return curve.front().semitones * 100.0f;
+    if (frac >= curve.back().frac) return curve.back().semitones * 100.0f;
+    for (std::size_t i = 1; i < curve.size(); ++i)
+        if (frac <= curve[i].frac) {
+            const auto sp = curve[i].frac - curve[i - 1].frac;
+            const auto t = sp > 1e-9 ? (frac - curve[i - 1].frac) / sp : 0.0;
+            return (float) (curve[i - 1].semitones + (curve[i].semitones - curve[i - 1].semitones) * t) * 100.0f;
+        }
+    return curve.back().semitones * 100.0f;
+}
 struct Note
 {
     std::int64_t start = 0;   // ticks
@@ -1100,6 +1113,7 @@ struct Note
     float modX = 0.5f, modY = 0.5f; // two free per-note modulation values 0..1 (stored, not yet routed)
     int colour = 0;           // note colour group 0..15 (FL's note colours; .flp note byte 'extra' bits 0-3)
     int group = 0;            // note group (FL's Group, Shift+G: clicking one note selects the group); 0 = none
+    std::vector<NotePitchPoint> pitchCurve;
     bool operator== (const Note&) const = default; // (Online Sessions P2: entity comparison, round 169b)
 };
 

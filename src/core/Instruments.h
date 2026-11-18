@@ -172,6 +172,7 @@ public:
     // A property of the sounding voices of `key` changes while they sound (VFX Envelope, round 164b): `prop` is a
     // vfx::Prop (0 velocity 0..1 — the voice's volume relative to its note-on velocity is value / velocity at
     // note-on —, 1 pitch in cents from the key, 2 pan −1..1, 3 Mod X, 4 Mod Y). Ignored if unsupported.
+    virtual bool hasVoicePitch() const noexcept { return false; }
     virtual void voiceProperty (int /*key*/, int /*prop*/, float /*value*/) noexcept {}
     // The same for a voice that arrived on MIDI port `port` (a Channel Rack VFX's output, round 165c): a Patcher passes
     // it to what that port reaches; hosted plugins cannot take it (MIDI has no per-voice properties).
