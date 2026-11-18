@@ -2261,6 +2261,12 @@ public:
         if (synth != nullptr)
             synth->slideTo (100.0 * std::clamp (key, 0, 127) - 6000.0 + (double) pitchCents.load() + (double) cents, samples);
     }
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        const int k = std::clamp (key, 0, 127);
+        take(); if (synth != nullptr && synth->held[k] != 0 && synth->hasPtab[k]) synth->slides[k].start (value + synth->slides[k].liveApplied, 1.0f);
+    }
 
     void noteOn (int key, float velocity) noexcept override
     {

@@ -1770,6 +1770,12 @@ public:
 
     // a slide note (issue #14): the held keys' voices glide their Final.Pitch to the slide's pitch
     bool followsChannelPorta() const noexcept override { return true; } // (round 168l: HostSlide::anchor)
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        const int k = std::clamp (key, 0, 127);
+        take(); if (held[k] >= 0 && eng->slots[held[k]].used) eng->slots[held[k]].slide.start (value + eng->slots[held[k]].slide.liveApplied, 1.0f);
+    }
     void slideTo (int key, float cents, float samples) noexcept override
     {
         take();

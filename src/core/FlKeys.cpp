@@ -1075,6 +1075,11 @@ public:
 
     // FL's PITCH knob and main pitch move the sounding notes too (round 167a)
     void setChannelPitchNow (float knob, float rest) noexcept override
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        for (auto& v : engine.voices) if (v.active && ! v.released && v.key == key) v.slide.start (value + v.slide.liveApplied, 1.0f);
+    }
     {
         live.set (knob, rest);
         for (auto& v : engine.voices)

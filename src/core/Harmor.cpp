@@ -4340,6 +4340,9 @@ public:
     }
 
     // a slide note (issue #14): the sounding, unreleased voices glide to `to` (Final.Pitch, cents) over `samples`
+    void voicePitch (int key, float cents) noexcept {
+        for (int i = 0; i < liveCount; ++i) { auto& v = records[(std::size_t) live[(std::size_t) i]]; if (v.note >= 0 && v.note < (int) notes.size() && notes[(std::size_t) v.note].key == key && ! v.released && v.dpos < 0) v.slide.start (cents + v.slide.liveApplied, 1.0f); }
+    }
     void slideTo (double to, float samples) noexcept
     {
         for (int i = 0; i < liveCount; ++i)
@@ -6436,6 +6439,11 @@ public:
     }
 
     bool followsChannelPorta() const noexcept override { return true; } // (round 168l: HostSlide::anchor)
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        take(); engine.voicePitch (key, value);
+    }
     void slideTo (int key, float cents, float samples) noexcept override
     {
         take();

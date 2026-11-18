@@ -993,6 +993,11 @@ public:
     }
 
     bool followsChannelPorta() const noexcept override { return true; } // (round 168l: HostSlide::anchor)
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        for (int i = 0; i < engine.count; ++i) { auto& v = engine.voices[(std::size_t) engine.order[(std::size_t) i]]; if (v.key == key && ! v.proc.released) v.slide.start (value + v.slide.liveApplied, 1.0f); }
+    }
     void slideTo (int key, float cents, float samples) noexcept override
     {
         const auto to = (float) (100.0 * (std::clamp (key, 0, 127) - 60) + (double) pitchCents.load() + (double) cents);

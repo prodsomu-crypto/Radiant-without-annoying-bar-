@@ -1038,6 +1038,14 @@ void Graph::cut() noexcept
             n->instrument->cut();
 }
 
+void Graph::voicePitchAll (int key, int prop, float value) noexcept {
+    for (const auto t : noteTargets) {
+        if ((std::size_t) t < layers.size() && layers[(std::size_t) t] != nullptr)
+            for (const auto& c : layers[(std::size_t) t]->children)
+                if (auto& i = nodes[(std::size_t) c.node]->instrument) i->voiceProperty (key, prop, value);
+        if (auto& i = nodes[(std::size_t) t]->instrument) i->voiceProperty (key, prop, value);
+    }
+}
 void Graph::slideTo (int key, float cents, float samples) noexcept
 {
     for (const auto t : noteTargets)
@@ -1575,6 +1583,8 @@ public:
     }
     int takePortEvents (PortEvent* out, int max) noexcept override { return graph.takeHostEvents (out, max); }
     bool followsSlides() const noexcept override { return true; } // (round 168l: a Mono channel's notes)
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override { graph.voicePitchAll (key, prop, value); }
     void slideTo (int key, float cents, float samples) noexcept override { graph.slideTo (key, cents, samples); }
     void setNextNoteExpression (float pan, float cents, bool porta) noexcept override { graph.setNextNoteExpression (pan, cents, porta); }
     void setNextNoteModulation (float modX, float modY) noexcept override { graph.setNextNoteModulation (modX, modY); }

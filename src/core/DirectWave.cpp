@@ -2175,6 +2175,11 @@ public:
         for (auto& nt : notes)
             nt.slide.start ((float) (to - (100.0 * (nt.key - 60) + nt.cents)), samples);
     }
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        for (auto& nt : notes) if (nt.key == key) nt.slide.start (value + nt.slide.liveApplied, 1.0f);
+    }
 
     void noteOn (int key, float velocity) noexcept override
     {

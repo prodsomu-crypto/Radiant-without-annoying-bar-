@@ -1744,7 +1744,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
                 if (snapS && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
                 if (mpePoint < 0)
                 {
-                    if (n.pitchCurve.empty()) { if (frac > 0.04) n.pitchCurve.push_back ({ 0.0, 0.0f }); n.pitchCurve.push_back ({ frac, st }); if (frac < 0.96) n.pitchCurve.push_back ({ 1.0, 0.0f }); }
+                    if (n.pitchCurve.empty()) { n.pitchCurve.push_back ({ 0.0, 0.0f }); n.pitchCurve.push_back ({ frac >= 0.72 ? 1.0 : frac, st }); }
                     else n.pitchCurve.push_back ({ frac, st });
                     std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
                     for (int k = 0; k < (int) n.pitchCurve.size(); ++k) if (std::abs (n.pitchCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
@@ -2296,7 +2296,7 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
                 const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
                 float st = juce::jlimit (-24.0f, 24.0f, ((float) keyToY (n.key) + (float) rowHeight * 0.5f - (float) e.y) / (float) rowHeight);
                 if (snapOn && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
-                if (mpeDrawing || (mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12))
+                if (mpePoint < 0 && mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12)
                 {
                     mpeDrawing = true;
                     const auto lo = std::min (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);

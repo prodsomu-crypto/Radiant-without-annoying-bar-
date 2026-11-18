@@ -2542,6 +2542,12 @@ public:
     }
 
     bool followsChannelPorta() const noexcept override { return true; } // (round 168l: HostSlide::anchor)
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        const int k = std::clamp (key, 0, 127);
+        take(); if (plugin != nullptr && plugin->slots[k].on) plugin->slots[k].slide.start (value + plugin->slots[k].slide.liveApplied, 1.0f);
+    }
     void slideTo (int key, float cents, float samples) noexcept override
     {
         take();

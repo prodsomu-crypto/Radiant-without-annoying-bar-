@@ -105,6 +105,8 @@ public:
     // Issue #14: the channel's PITCH knob, fine tune and main pitch reach the plugin as MIDI pitch bend (scaled by the
     // wrapper's pitch bend range), and a slide note bends the sounding notes to its key over its length
     void setLivePitch (float cents) noexcept override { livePitch = cents; }
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override;
     void slideTo (int key, float cents, float samples) noexcept override;
     // FL's channel Porta / Mono (round 168l): a new note starts bent from the previous note's pitch and bends back
     bool followsChannelPorta() const noexcept override { return true; }
@@ -118,6 +120,9 @@ private:
     float slideNow = 0.0f, slideTarget = 0.0f;  // semitones away from the last note's key
     float slideLeft = 0.0f;                     // samples
     int lastKey = -1, sentBend = 8192;
+    int mpeKeyCh[128] {};
+    bool mpeBusy[16] {};
+    int mpeNextCh = 1;
     juce::MidiBuffer* bendInto = nullptr;
     void flushMidiControls() noexcept;
     void collectMidiOutput (const juce::MidiBuffer& buffer) noexcept; // the plugin's MIDI output (wrapper Output port)

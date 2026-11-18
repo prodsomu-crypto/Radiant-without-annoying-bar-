@@ -914,6 +914,12 @@ public:
         if (plugin != nullptr)
             plugin->slideTo (100.0 * (std::clamp (key, 0, 127) - 60) + (double) pitchCents.load() + (double) cents, samples);
     }
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        const int k = std::clamp (key, 0, 127);
+        take(); if (plugin != nullptr && plugin->held[k].on && plugin->held[k].down) plugin->held[k].slide.start (value + plugin->held[k].slide.liveApplied, 1.0f);
+    }
     void setChannelPitchNow (float knob, float rest) noexcept override
     {
         live.set (knob, rest);

@@ -973,6 +973,11 @@ public:
             if (v.active && v.release < 0.0)
                 v.slide.start (to - (100.0f * (float) (v.key - 60) + v.noteCents), samples * (float) (fs / hostRate));
     }
+    bool hasVoicePitch() const noexcept override { return true; }
+    void voiceProperty (int key, int prop, float value) noexcept override {
+        if (prop != 1 || ! std::isfinite (value)) return;
+        for (auto& v : voices) if (v.active && v.release < 0.0 && v.key == key) v.slide.start (value + v.slide.liveApplied, 1.0f);
+    }
 
     void noteOn (int key, float velocity) noexcept override
     {
