@@ -23,7 +23,8 @@ void EventBuffer::sortByOffset() noexcept
     const auto before = [] (const NoteEvent& a, const NoteEvent& b) {
         if (a.sampleOffset != b.sampleOffset)
             return a.sampleOffset < b.sampleOffset;
-        return a.type != NoteEvent::Type::on && b.type == NoteEvent::Type::on;
+        // Note-offs precede retriggers, but a note's initial expression must follow its note-on at the same sample.
+        return a.type == NoteEvent::Type::off && b.type == NoteEvent::Type::on;
     };
     for (int i = 1; i < count; ++i)
     {
@@ -74,13 +75,14 @@ using NoteTiming = PlayedTiming;
 NoteTiming noteTiming (const Note& note, float swing, const ChannelDef* c) noexcept { return playedTiming (note, swing, c); }
 
 template <typename EmitFn>
-void emitMpePitch (const Note& note, double startTick, std::int64_t lenTicks, double tps, EmitFn&& emit) noexcept {
+void emitMpePitch (const Note& note, int memberChannel, double startTick, std::int64_t lenTicks, double tps, EmitFn&& emit) noexcept {
     if (note.slide || note.pitchCurve.empty() || lenTicks <= 0) return;
     const auto steps = std::clamp ((int) std::ceil ((double) lenTicks / std::max (8.0, tps * 64.0)), 2, 128);
     for (int s = 0; s <= steps; ++s) {
         const auto frac = (double) s / (double) steps;
         NoteEvent vp; vp.type = NoteEvent::Type::voiceProp; vp.channel = note.channel; vp.key = note.key;
         vp.prop = (std::uint8_t) vfx::Prop::pitch; vp.velocity = evalPitchCurveCents (note.pitchCurve, frac);
+        vp.mpeChannel = (std::int8_t) memberChannel;
         emit (startTick + frac * (double) (lenTicks - 1), vp);
     }
 }
@@ -150,8 +152,12 @@ void schedulePatternLoop (const Pattern& pattern,
         out.add (e);
     };
 
-    for (const auto& note : pattern.notes)
+    // When a pattern contains note expression, route every note through an MPE member channel. This is important
+    // for notes without a curve too: they remain independent members of the same chord instead of sharing the master.
+    const auto hasMpe = std::any_of (pattern.notes.begin(), pattern.notes.end(), [] (const Note& n) { return ! n.pitchCurve.empty(); });
+    for (std::size_t noteIndex = 0; noteIndex < pattern.notes.size(); ++noteIndex)
     {
+        const auto& note = pattern.notes[noteIndex];
         if ((! linear && note.start >= patternLength) || note.muted)
             continue; // outside the loop / muted note
 
@@ -167,6 +173,7 @@ void schedulePatternLoop (const Pattern& pattern,
         on.modY = note.modY;
         on.release = note.release;
         on.colour = (std::int8_t) (note.colour & 15);
+        on.mpeChannel = hasMpe ? (std::int8_t) (noteIndex % 15 + 1) : (std::int8_t) -1;
         const auto timing = noteTiming (note, swing, channelOf (channels, note.channel));
         const auto start = timing.start;
 
@@ -180,7 +187,7 @@ void schedulePatternLoop (const Pattern& pattern,
 
         on.lengthTicks = (float) timing.length;
         emit ((double) start, on);
-        emitMpePitch (note, (double) start, timing.length, tps, emit);
+        emitMpePitch (note, on.mpeChannel, (double) start, timing.length, tps, emit);
         if (chase && (double) start + tps <= position && (double) (start + timing.length) > position)
         {
             on.sampleOffset = 0; // a note crossing the start position ("Play truncated notes on transport")
@@ -386,6 +393,7 @@ void scheduleClip (const Song& song, const Clip& clip, std::size_t clipIndex, do
 
     const auto& pattern = song.patterns[(std::size_t) clip.pattern];
     const auto& notes = pattern.notes;
+    const auto hasMpe = std::any_of (notes.begin(), notes.end(), [] (const Note& n) { return ! n.pitchCurve.empty(); });
     // LYNX extra (stretchedClipsLoop(), default on; issue #25): a pattern clip longer than its pattern loops it (FL
     // plays it once, round 168k; the Playlist draws what plays): pass k plays the pattern's notes k·L later, L = the
     // pattern's length. A clip within its pattern, or the option off, is one pass of the notes in [offset, offset + length).
@@ -415,6 +423,7 @@ void scheduleClip (const Song& song, const Clip& clip, std::size_t clipIndex, do
         for (auto it = first; it != last; ++it)
         {
             const auto& note = *it;
+            const auto noteIndex = (std::size_t) (it - notes.begin());
             if (repeats && note.start >= period) // a pass is the pattern's length
                 continue;
             const auto start = note.start + shift; // where the note is in the clip's passes
@@ -449,6 +458,7 @@ void scheduleClip (const Song& song, const Clip& clip, std::size_t clipIndex, do
             e.modY = note.modY;
             e.release = note.release;
             e.colour = (std::int8_t) (note.colour & 15);
+            e.mpeChannel = hasMpe ? (std::int8_t) (noteIndex % 15 + 1) : (std::int8_t) -1;
 
             if (note.slide)
             {
@@ -460,7 +470,7 @@ void scheduleClip (const Song& song, const Clip& clip, std::size_t clipIndex, do
 
             e.lengthTicks = (float) (off - on);
             emitOccurrences ((double) on, loop, startTick, endTick, tps, numSamples, e, out);
-            emitMpePitch (note, (double) on, off - on, tps, [&] (double t, const NoteEvent& vp) { emitOccurrences (t, loop, startTick, endTick, tps, numSamples, vp, out); });
+            emitMpePitch (note, e.mpeChannel, (double) on, off - on, tps, [&] (double t, const NoteEvent& vp) { emitOccurrences (t, loop, startTick, endTick, tps, numSamples, vp, out); });
             if (chase && (double) on + tps <= loopStart && (double) off > loopStart)
             {
                 e.sampleOffset = 0; // a note crossing the start position ("Play truncated notes on transport")
