@@ -99,6 +99,9 @@ public:
     float midiControlValue (int index) const noexcept { return midiControls.value (index); }
     void noteOnMidi (int key, float velocity, int midiChannel) noexcept override;
     void noteOffMidi (int key, int midiChannel) noexcept override;
+    void noteOnMpe (int key, float velocity, int memberChannel, double startSeconds) noexcept override;
+    void noteOffMpe (int key, int memberChannel) noexcept override;
+    void pitchMpe (int key, float cents, int memberChannel) noexcept override;
     void midiMessage (const std::uint8_t* bytes, int size) noexcept override { midi.addEvent (bytes, size, 0); }
     void pitchBend (float) noexcept override {} // (the plugin takes the raw MIDI pitch bend, midiMessage)
     int takeMidiOutput (MidiOutNote* out, int max) noexcept override;
@@ -127,6 +130,7 @@ private:
     HostedOptions options;
     float nextModX = 0.5f, nextRelease = 0.5f;
     bool bendRangeSent = false;
+    std::array<bool, 16> mpeBendRangeSent {}; // pitch-bend sensitivity configured on each member channel
     std::atomic<bool> resetPending { false };     // panic with "Reset plugin": reset at the next render (audio thread)
     HostedKeys heldKeys; // per MIDI channel: the notes on (their note offs on stop / jump, round 169c)
     void hold (int channel, int key, bool on) noexcept { heldKeys.set (channel, key, on); }
