@@ -63,42 +63,7 @@ if(ANDROID)
         file(WRITE "${RADIANT_JUCE_ANDROID_PEER_SOURCE}" "${_radiant_juce_android_peer_source}")
     endif()
 
-    # JUCE opens a submenu after its hover timer sees the pointer over the parent row. Android touch has no persistent
-    # hover, so a normal tap on a submenu row can leave the parent menu open. Open the child menu on touch release.
-    set(RADIANT_JUCE_ANDROID_POPUP_SOURCE
-        "${juce_SOURCE_DIR}/modules/juce_gui_basics/menus/juce_PopupMenu.cpp")
-    if(NOT EXISTS "${RADIANT_JUCE_ANDROID_POPUP_SOURCE}")
-        message(FATAL_ERROR "Could not find JUCE popup menu source: ${RADIANT_JUCE_ANDROID_POPUP_SOURCE}")
-    endif()
-
-    file(READ "${RADIANT_JUCE_ANDROID_POPUP_SOURCE}" _radiant_juce_android_popup_source)
-    set(_radiant_juce_touch_submenu_upstream [=[        mouseUpCanTrigger |= true;
-    }
-
-    // Any move/drag after the menu is created]=])
-    set(_radiant_juce_touch_submenu_fixed [=[        mouseUpCanTrigger |= true;
-
-        if (e.source.isTouch() && ! isSubMenuVisible())
-            showSubMenuFor (currentChild);
-        if (e.source.isTouch() && (Time::getCurrentTime() - creationTime).inMilliseconds() < 220)
-            return;
-    }
-
-    // Any move/drag after the menu is created]=])
-
-    string(FIND "${_radiant_juce_android_popup_source}" "${_radiant_juce_touch_submenu_fixed}" _radiant_juce_touch_submenu_fixed_pos)
-    if(_radiant_juce_touch_submenu_fixed_pos EQUAL -1)
-        string(FIND "${_radiant_juce_android_popup_source}" "${_radiant_juce_touch_submenu_upstream}" _radiant_juce_touch_submenu_upstream_pos)
-        if(_radiant_juce_touch_submenu_upstream_pos EQUAL -1)
-            message(FATAL_ERROR "JUCE PopupMenu::mouseUp() changed; review the Android touch submenu patch")
-        endif()
-
-        string(REPLACE "${_radiant_juce_touch_submenu_upstream}"
-                       "${_radiant_juce_touch_submenu_fixed}"
-                       _radiant_juce_android_popup_source
-                       "${_radiant_juce_android_popup_source}")
-        file(WRITE "${RADIANT_JUCE_ANDROID_POPUP_SOURCE}" "${_radiant_juce_android_popup_source}")
-    endif()
+    
 endif()
 
 set(RADIANT_ANDROID_APP_SOURCES
