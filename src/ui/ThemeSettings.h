@@ -22,6 +22,8 @@ void apply (const themes::Spec& spec, bool save = true);
 void apply (const themes::Spec& spec, const themes::Palette& palette, bool save = true);
 // Reads the saved theme and sets the tokens (call once at start, before the first window).
 void loadSaved();
+bool hasSaved();
+void saveCurrent();
 
 // .lynxtheme files (JSON: name, accent, background, workspace, image, fit, imageOpacity, dim, startupSound).
 juce::String toJson (const themes::Spec& spec);

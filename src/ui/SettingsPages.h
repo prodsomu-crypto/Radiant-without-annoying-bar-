@@ -60,6 +60,7 @@ struct SettingsHooks
     std::function<void (const GeneralOptions&)> setGeneral; // applies and saves
     std::function<void()> manageShortcuts, managePlugins;
     std::function<void()> midiChanged;                   // the MIDI settings were changed (the engine already has them)
+    std::function<void()> saveAll;
 };
 
 // Settings pages (Settings window, ui/SettingsDialog.cpp)

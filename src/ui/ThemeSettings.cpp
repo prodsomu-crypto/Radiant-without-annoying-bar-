@@ -123,6 +123,9 @@ void apply (const themes::Spec& spec, const themes::Palette& palette, bool save)
     changes().sendChangeMessage();
 }
 
+bool hasSaved() { return savedFile().existsAsFile(); }
+void saveCurrent() { saveFile (state(), savedFile()); }
+
 void loadSaved()
 {
     if (auto spec = loadFile (savedFile()))

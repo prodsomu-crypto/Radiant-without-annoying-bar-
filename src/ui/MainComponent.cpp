@@ -5557,6 +5557,9 @@ void MainComponent::openSettings (int page)
         if (safe != nullptr)
             safe->showPluginManager();
     };
+    hooks.saveAll = [safe] {
+        if (safe != nullptr) { safe->saveUiSettings(); safe->workspace.saveState(); }
+    };
     showSettings (engine, (SettingsPage) juce::jlimit (0, (int) SettingsPage::theme, page), std::move (hooks)); // (Theme was clamped to MIDI)
 }
 

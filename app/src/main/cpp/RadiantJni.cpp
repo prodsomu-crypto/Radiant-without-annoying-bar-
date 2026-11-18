@@ -44,6 +44,7 @@ void initialiseRuntime()
     radiantTheme.accent = 0xffd0bcff;
     radiantTheme.background = 0xff141218;
     lynx::themeui::apply(radiantTheme, false);
+    lynx::themeui::loadSaved();
 
     // Playback output does not require microphone permission. Recording input stays opt-in and is opened only
     // after Android grants RECORD_AUDIO.
@@ -67,7 +68,7 @@ Java_com_radiant_daw_NativeBridge_attachEditor(JNIEnv* env, jclass, jobject host
         return;
 
     if (mainComponent == nullptr)
-        mainComponent = std::make_unique<lynx::MainComponent>(*audioEngine, false);
+        mainComponent = std::make_unique<lynx::MainComponent>(*audioEngine, true);
 
     mainComponent->beginAndroidSession();
 
@@ -115,7 +116,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_radiant_daw_NativeBridge_setEditorPalette(JNIEnv*, jclass, jint primary, jint secondary, jint tertiary,
                                                     jint background, jint surface, jint surfaceVariant, jint onSurface)
 {
-    if (juceGuiInitialiser == nullptr)
+    if (juceGuiInitialiser == nullptr || lynx::themeui::hasSaved())
         return;
 
     lynx::themes::Spec spec;
@@ -408,4 +409,11 @@ Java_com_radiant_daw_NativeBridge_cancelQuickTouch(JNIEnv*, jclass)
 {
     if (mainComponent != nullptr)
         mainComponent->cancelAndroidQuickTouch();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_radiant_daw_NativeBridge_saveSettingsNow(JNIEnv*, jclass)
+{
+    if (mainComponent != nullptr)
+        mainComponent->saveSettingsFromAndroid();
 }

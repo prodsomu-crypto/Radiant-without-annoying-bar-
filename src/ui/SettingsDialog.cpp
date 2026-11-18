@@ -602,10 +602,10 @@ private:
     std::unique_ptr<FolderList> searchFolders, browserFolders, pluginFolders;
 };
 
-class SettingsPanel final : public juce::Component
+class SettingsPanel final : public juce::Component, private juce::Timer
 {
 public:
-    SettingsPanel (AudioEngine& engine, SettingsPage page, bool persistent, SettingsHooks hooks)
+    SettingsPanel (AudioEngine& engine, SettingsPage page, bool persistent, SettingsHooks h) : hooks (std::move (h))
     {
         tabs.setTabBarDepth (34);
         tabs.setOutline (0);
@@ -633,11 +633,35 @@ public:
                 tabs.setCurrentTabIndex (tabs.getNumTabs() - 1, false);
         }
         addAndMakeVisible (tabs);
-        setSize (680, 620);
+        styleLabel (statusLabel, {}, false);
+        statusLabel.setFont (theme::font (theme::type::small));
+        statusLabel.setColour (juce::Label::textColourId, theme::colour::accent);
+        statusLabel.setJustificationType (juce::Justification::centredRight);
+        addAndMakeVisible (statusLabel);
+        saveButton.setColour (juce::TextButton::buttonColourId, theme::colour::accent);
+        saveButton.setColour (juce::TextButton::textColourOffId, theme::colour::onAccent);
+        saveButton.onClick = [this] { themeui::saveCurrent(); if (hooks.saveAll) hooks.saveAll(); statusLabel.setText (tr ("Settings saved"), juce::dontSendNotification); startTimer (2500); };
+        addAndMakeVisible (saveButton);
+        setSize (680, 660);
     }
 
-    void paint (juce::Graphics& g) override { g.fillAll (theme::colour::bg2); }
-    void resized() override { tabs.setBounds (getLocalBounds()); }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (theme::colour::bg2);
+        auto footer = getLocalBounds().removeFromBottom (46);
+        g.setColour (theme::colour::bg1); g.fillRect (footer);
+        g.setColour (theme::colour::border); g.fillRect (footer.removeFromTop (1));
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        auto footer = area.removeFromBottom (46).reduced (14, 8);
+        saveButton.setBounds (footer.removeFromRight (theme::buttonWidth (saveButton, 96, 160)));
+        footer.removeFromRight (10);
+        statusLabel.setBounds (footer);
+        tabs.setBounds (area);
+    }
 
     SettingsPage currentPage() const
     {
@@ -653,8 +677,12 @@ public:
     }
 
 private:
+    void timerCallback() override { stopTimer(); statusLabel.setText ({}, juce::dontSendNotification); }
+    SettingsHooks hooks;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-    std::vector<SettingsPage> pages; // in tab order
+    std::vector<SettingsPage> pages;
+    juce::Label statusLabel;
+    juce::TextButton saveButton { tr ("Save") };
 };
 
 SettingsPanel* openSettingsPanel()

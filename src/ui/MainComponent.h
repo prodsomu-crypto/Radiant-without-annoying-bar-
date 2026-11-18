@@ -69,6 +69,7 @@ public:
     juce::String getAndroidProjectName() const { return projectName; }
     double getAndroidSongBpm() const noexcept { return engine.getSong().bpm; }
     void markAndroidSaveFailed() { engine.markModified(); }
+    void saveSettingsFromAndroid() { saveUiSettings(); workspace.saveState(); }
     void cancelAndroidQuickTouch()
     {
         pianoRoll.cancelQuickTouch();

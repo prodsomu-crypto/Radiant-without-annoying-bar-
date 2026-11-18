@@ -222,6 +222,11 @@ class RadiantActivity : ComponentActivity() {
         applyFullscreen()
     }
 
+    override fun onStop() {
+        NativeBridge.saveSettingsNow()
+        super.onStop()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
