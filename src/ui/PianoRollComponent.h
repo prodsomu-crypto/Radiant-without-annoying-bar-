@@ -165,7 +165,7 @@ public:
 
 private:
     enum class Drag { none, move, resize, resizeLeft, erase, keyboard, select, velocity, velocityLine, velocitySet, paint, muting, knife,
-                      zoomRange, listen, pan, keyZoom, timeZoom, keySelect, rulerSelect, seek, drumPaint, stretch, eventDraw, eventErase, laneResize, mpePitch };
+                      zoomRange, listen, pan, keyZoom, timeZoom, keySelect, rulerSelect, seek, drumPaint, stretch, eventDraw, eventErase, laneResize, mpePitch, mpeExpr };
 
     // Channel selector: the wheel steps through the channels with notes (Ctrl+wheel: all channels).
     class ChannelBox final : public juce::ComboBox
@@ -392,7 +392,11 @@ private:
     bool startedOnEmpty = false, erasedSomething = false, holdExpired = false;
     bool touchCreatedNote = false;
     bool creatingNote = false;
-    bool mpePitchMode = false, mpeDrawing = false;
+    enum class MpeCurveMode : int { off = 0, pitch = 1, expression = 2 };
+    MpeCurveMode mpeMode = MpeCurveMode::off;
+    bool mpeDrawing = false;
+    void showMpeModeMenu();
+    void updateMpeButton();
     int mpeNote = -1, mpePoint = -1;
     double mpeLastFrac = -1.0;
     juce::uint32 mpeLastTapMs = 0;

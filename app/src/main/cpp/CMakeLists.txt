@@ -80,6 +80,8 @@ if(ANDROID)
 
         if (e.source.isTouch() && ! isSubMenuVisible())
             showSubMenuFor (currentChild);
+        if (e.source.isTouch() && (Time::getCurrentTime() - creationTime).inMilliseconds() < 220)
+            return;
     }
 
     // Any move/drag after the menu is created]=])

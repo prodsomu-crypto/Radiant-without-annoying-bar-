@@ -1097,6 +1097,43 @@ inline float evalPitchCurveCents (const std::vector<NotePitchPoint>& curve, doub
         }
     return curve.back().semitones * 100.0f;
 }
+struct NoteCurvePoint
+{
+    double frac = 0.0;
+    float value = 1.0f;
+    bool operator== (const NoteCurvePoint&) const = default;
+};
+
+inline float evalExprCurveValue (const std::vector<NoteCurvePoint>& curve, double frac, float def = 1.0f) noexcept
+{
+    if (curve.empty()) return def;
+    if (frac <= curve.front().frac) return curve.front().value;
+    if (frac >= curve.back().frac) return curve.back().value;
+    for (std::size_t i = 1; i < curve.size(); ++i)
+    {
+        if (frac <= curve[i].frac)
+        {
+            const auto sp = curve[i].frac - curve[i - 1].frac;
+            const auto t = sp > 1e-9 ? (frac - curve[i - 1].frac) / sp : 0.0;
+            return (float) (curve[i - 1].value + (curve[i].value - curve[i - 1].value) * t);
+        }
+    }
+    return curve.back().value;
+}
+
+struct NoteCurvePoint { double frac = 0.0; float value = 1.0f; bool operator== (const NoteCurvePoint&) const = default; };
+inline float evalExprCurveValue (const std::vector<NoteCurvePoint>& curve, double frac, float def = 1.0f) noexcept {
+    if (curve.empty()) return def;
+    if (frac <= curve.front().frac) return curve.front().value;
+    if (frac >= curve.back().frac) return curve.back().value;
+    for (std::size_t i = 1; i < curve.size(); ++i)
+        if (frac <= curve[i].frac) {
+            const auto sp = curve[i].frac - curve[i - 1].frac;
+            const auto t = sp > 1e-9 ? (frac - curve[i - 1].frac) / sp : 0.0;
+            return (float) (curve[i - 1].value + (curve[i].value - curve[i - 1].value) * t);
+        }
+    return curve.back().value;
+}
 struct Note
 {
     std::int64_t start = 0;   // ticks
@@ -1114,6 +1151,7 @@ struct Note
     int colour = 0;           // note colour group 0..15 (FL's note colours; .flp note byte 'extra' bits 0-3)
     int group = 0;            // note group (FL's Group, Shift+G: clicking one note selects the group); 0 = none
     std::vector<NotePitchPoint> pitchCurve;
+    std::vector<NoteCurvePoint> exprCurve;
     bool operator== (const Note&) const = default; // (Online Sessions P2: entity comparison, round 169b)
 };
 

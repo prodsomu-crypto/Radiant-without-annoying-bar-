@@ -2055,7 +2055,7 @@ juce::String toJson (const Song& song)
 
             // [.., pan, fine pitch, muted] only when not default
             // [.., release, mod X, mod Y (, colour)]
-            const auto extra = n.release != 0.5f || n.modX != 0.5f || n.modY != 0.5f || n.colour != 0 || n.group != 0 || ! n.pitchCurve.empty();
+            const auto extra = n.release != 0.5f || n.modX != 0.5f || n.modY != 0.5f || n.colour != 0 || n.group != 0 || ! n.pitchCurve.empty() || ! n.exprCurve.empty();
             if (n.pan != 0.0f || n.finePitch != 0.0f || n.muted || n.slide || n.porta || extra)
             {
                 note.add (juce::roundToInt (n.pan * 1000.0f) / 1000.0);
@@ -2071,6 +2071,8 @@ juce::String toJson (const Song& song)
                     note.add (n.colour);
                 if (n.group != 0 || ! n.pitchCurve.empty()) note.add (n.group);
                 if (! n.pitchCurve.empty()) { juce::Array<juce::var> pc; for (const auto& pt : n.pitchCurve) { pc.add (pt.frac); pc.add ((double) pt.semitones); } note.add (juce::var (pc)); }
+                else if (! n.exprCurve.empty()) note.add (juce::var (juce::Array<juce::var>()));
+                if (! n.exprCurve.empty()) { juce::Array<juce::var> ec; for (const auto& pt : n.exprCurve) { ec.add (pt.frac); ec.add ((double) pt.value); } note.add (juce::var (ec)); }
             }
 
             notes.add (note);
@@ -2451,6 +2453,7 @@ std::optional<Song> fromJson (const juce::String& json, juce::String& error)
                         if (n.size() >= 15) note.group = juce::jmax (0, (int) n[14]);
                         if (n.size() >= 16 && n[15].isArray()) if (const auto* pc = n[15].getArray())
                             for (int k = 0; k + 1 < pc->size(); k += 2) note.pitchCurve.push_back ({ juce::jlimit (0.0, 1.0, (double) (*pc)[k]), juce::jlimit (-48.0f, 48.0f, (float) (double) (*pc)[k + 1]) });
+                        if (n.size() >= 17 && n[16].isArray()) if (const auto* ec = n[16].getArray()) for (int k = 0; k + 1 < ec->size(); k += 2) note.exprCurve.push_back ({ juce::jlimit (0.0, 1.0, (double) (*ec)[k]), juce::jlimit (0.0f, 1.0f, (float) (double) (*ec)[k + 1]) });
                     }
 
                     if (note.channel >= 0 && note.channel < (int) song.channels.size())

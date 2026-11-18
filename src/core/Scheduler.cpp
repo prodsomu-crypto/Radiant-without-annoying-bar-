@@ -74,6 +74,32 @@ using NoteTiming = PlayedTiming;
 NoteTiming noteTiming (const Note& note, float swing, const ChannelDef* c) noexcept { return playedTiming (note, swing, c); }
 
 template <typename EmitFn>
+void emitMpeExpr (const Note& note, double startTick, std::int64_t lenTicks, double tps, EmitFn&& emit) noexcept
+{
+    if (note.slide || note.exprCurve.empty() || lenTicks <= 0) return;
+    const auto steps = std::clamp ((int) std::ceil ((double) lenTicks / std::max (8.0, tps * 64.0)), 2, 128);
+    for (int s = 0; s <= steps; ++s)
+    {
+        const auto frac = (double) s / (double) steps;
+        NoteEvent vp; vp.type = NoteEvent::Type::voiceProp; vp.channel = note.channel; vp.key = note.key;
+        vp.prop = (std::uint8_t) vfx::Prop::velocity;
+        vp.velocity = evalExprCurveValue (note.exprCurve, frac, 1.0f);
+        emit (startTick + frac * (double) (lenTicks - 1), vp);
+    }
+}
+
+template <typename EmitFn>
+void emitMpeExpr (const Note& note, double startTick, std::int64_t lenTicks, double tps, EmitFn&& emit) noexcept {
+    if (note.slide || note.exprCurve.empty() || lenTicks <= 0) return;
+    const auto steps = std::clamp ((int) std::ceil ((double) lenTicks / std::max (8.0, tps * 64.0)), 2, 128);
+    for (int s = 0; s <= steps; ++s) {
+        const auto frac = (double) s / (double) steps;
+        NoteEvent vp; vp.type = NoteEvent::Type::voiceProp; vp.channel = note.channel; vp.key = note.key;
+        vp.prop = (std::uint8_t) vfx::Prop::velocity; vp.velocity = evalExprCurveValue (note.exprCurve, frac, 1.0f);
+        emit (startTick + frac * (double) (lenTicks - 1), vp);
+    }
+}
+template <typename EmitFn>
 void emitMpePitch (const Note& note, double startTick, std::int64_t lenTicks, double tps, EmitFn&& emit) noexcept {
     if (note.slide || note.pitchCurve.empty() || lenTicks <= 0) return;
     const auto steps = std::clamp ((int) std::ceil ((double) lenTicks / std::max (8.0, tps * 64.0)), 2, 128);
@@ -181,6 +207,7 @@ void schedulePatternLoop (const Pattern& pattern,
         on.lengthTicks = (float) timing.length;
         emit ((double) start, on);
         emitMpePitch (note, (double) start, timing.length, tps, emit);
+        emitMpeExpr (note, (double) start, timing.length, tps, emit);
         if (chase && (double) start + tps <= position && (double) (start + timing.length) > position)
         {
             on.sampleOffset = 0; // a note crossing the start position ("Play truncated notes on transport")
@@ -461,6 +488,7 @@ void scheduleClip (const Song& song, const Clip& clip, std::size_t clipIndex, do
             e.lengthTicks = (float) (off - on);
             emitOccurrences ((double) on, loop, startTick, endTick, tps, numSamples, e, out);
             emitMpePitch (note, (double) on, off - on, tps, [&] (double t, const NoteEvent& vp) { emitOccurrences (t, loop, startTick, endTick, tps, numSamples, vp, out); });
+            emitMpeExpr (note, (double) on, off - on, tps, [&] (double t, const NoteEvent& vp) { emitOccurrences (t, loop, startTick, endTick, tps, numSamples, vp, out); });
             if (chase && (double) on + tps <= loopStart && (double) off > loopStart)
             {
                 e.sampleOffset = 0; // a note crossing the start position ("Play truncated notes on transport")

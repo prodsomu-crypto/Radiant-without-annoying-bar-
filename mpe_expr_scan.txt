@@ -1,0 +1,148 @@
+]633;E;echo "=== PianoRollComponent MPE button & mode ===";82b92963-6630-4e4f-ba8c-ffed0cdf8b59]633;C=== PianoRollComponent MPE button & mode ===
+src/ui/PianoRollComponent.h-259-    IconButton playButton { "play", Icon::play }; // FL's "Play / pause pattern" (EEPlayBtn); right-click: back to the last start
+src/ui/PianoRollComponent.h-260-    IconButton followButton { "follow", Icon::follow }; // Follow (auto scrolling) on/off, EditorGlobals (round 162)
+src/ui/PianoRollComponent.h-261-    void quantizeOperation (int kind); // 0 = starts, 1 = starts and lengths (quick quantize), 2 = starts 50% toward the grid
+src/ui/PianoRollComponent.h-262-    juce::ComboBox laneBox; // what the bottom lane edits: velocity, pan or fine pitch
+src/ui/PianoRollComponent.h-263-    IconComboBox chordBox { Icon::chord }; // chord created on each click (like FL's "stamp")
+src/ui/PianoRollComponent.h-264-    IconButton slideButton { "slide", Icon::slide };
+src/ui/PianoRollComponent.h:265:    IconButton mpePitchButton { "mpePitch", Icon::none, "MPE" }; // new notes slide (like FL's slide tool)
+src/ui/PianoRollComponent.h-266-    IconComboBox scaleBox { Icon::keyboard }; // scale highlighted on the keyboard rows
+src/ui/PianoRollComponent.h-267-    // note colour groups (FL's 16 note colours; REA round 153): new notes get `noteColour`; the swatch opens a menu
+src/ui/PianoRollComponent.h-268-    // that picks it, colours the selection and selects by colour
+src/ui/PianoRollComponent.h-269-    class ColourSwatch final : public juce::Button
+src/ui/PianoRollComponent.h-270-    {
+src/ui/PianoRollComponent.h-271-    public:
+--
+src/ui/PianoRollComponent.h-389-    std::int64_t lastDrumCell = -1;
+src/ui/PianoRollComponent.h-390-    int lastDrumKey = -1;
+src/ui/PianoRollComponent.h-391-    bool resizeFromLeft = true;       // the left edge of a note resizes it (Ctrl+Alt+Home turns it off)
+src/ui/PianoRollComponent.h-392-    bool startedOnEmpty = false, erasedSomething = false, holdExpired = false;
+src/ui/PianoRollComponent.h-393-    bool touchCreatedNote = false;
+src/ui/PianoRollComponent.h-394-    bool creatingNote = false;
+src/ui/PianoRollComponent.h:395:    bool mpePitchMode = false, mpeDrawing = false;
+src/ui/PianoRollComponent.h-396-    int mpeNote = -1, mpePoint = -1;
+src/ui/PianoRollComponent.h-397-    double mpeLastFrac = -1.0;
+src/ui/PianoRollComponent.h-398-    juce::uint32 mpeLastTapMs = 0;
+src/ui/PianoRollComponent.h-399-    juce::Point<int> mpeLastTapPos;
+src/ui/PianoRollComponent.h-400-    double rowHeightFloat = 14.0;
+src/ui/PianoRollComponent.h-401-    juce::uint32 lastTouchTapMs = 0;
+--
+src/ui/PianoRollComponent.cpp-279-    slideButton.setWantsKeyboardFocus (false);
+src/ui/PianoRollComponent.cpp-280-    slideButton.setMouseClickGrabsKeyboardFocus (false);
+src/ui/PianoRollComponent.cpp-281-    slideButton.setOnColour (theme::colour::bg6);
+src/ui/PianoRollComponent.cpp-282-    slideButton.setIconColourWhenOn (theme::colour::accent);
+src/ui/PianoRollComponent.cpp-283-    slideButton.setFlat (true);
+src/ui/PianoRollComponent.cpp-284-    addAndMakeVisible (slideButton);
+src/ui/PianoRollComponent.cpp:285:    mpePitchButton.setClickingTogglesState (true); mpePitchButton.setFlat (false);
+src/ui/PianoRollComponent.cpp:286:    mpePitchButton.setOnColour (theme::colour::accent); mpePitchButton.setIconColourWhenOn (theme::colour::onAccent);
+src/ui/PianoRollComponent.cpp:287:    mpePitchButton.setTooltip (tr ("MPE Pitch mode: edit per-note pitch glide curves"));
+src/ui/PianoRollComponent.cpp:288:    mpePitchButton.onClick = [this] { mpePitchMode = mpePitchButton.getToggleState(); repaint(); };
+src/ui/PianoRollComponent.cpp:289:    addAndMakeVisible (mpePitchButton);
+src/ui/PianoRollComponent.cpp-290-    ui::setQuickTip (chordBox, tr ("Chord stamp"));
+src/ui/PianoRollComponent.cpp-291-    ui::setQuickTip (scaleBox, tr ("Scale"));
+src/ui/PianoRollComponent.cpp-292-    chordBox.iconLit = [this] { return chordBox.getSelectedId() > 1; };
+src/ui/PianoRollComponent.cpp-293-    scaleBox.iconLit = [this] { return scaleIndex() > 0; };
+src/ui/PianoRollComponent.cpp-294-
+src/ui/PianoRollComponent.cpp-295-    colourButton.setTooltip (tr ("Note colour: new notes get this colour. Click: choose it, colour the selection (Alt+C), "
+--
+src/ui/PianoRollComponent.cpp-513-    pasteButton.setText (compactBar ? juce::String() : tr ("Paste"));
+src/ui/PianoRollComponent.cpp-514-    place (playButton, h);
+src/ui/PianoRollComponent.cpp-515-    place (copyButton, compactBar ? h : copyButton.getIdealWidth (h));
+src/ui/PianoRollComponent.cpp-516-    place (pasteButton, compactBar ? h : pasteButton.getIdealWidth (h));
+src/ui/PianoRollComponent.cpp-517-    place (channelBox, compactBar ? 104 : 150);
+src/ui/PianoRollComponent.cpp-518-    place (tools, tools.getIdealWidth (h));
+src/ui/PianoRollComponent.cpp:519:    place (mpePitchButton, 44);
+src/ui/PianoRollComponent.cpp-520-    place (snapBox, 64);
+src/ui/PianoRollComponent.cpp-521-    place (ghostButton, h);
+src/ui/PianoRollComponent.cpp-522-    place (followButton, h);
+src/ui/PianoRollComponent.cpp-523-    place (slideButton, h, true);
+src/ui/PianoRollComponent.cpp-524-    place (colourButton, h, true);
+src/ui/PianoRollComponent.cpp-525-    place (chordBox, 100, true);
+--
+src/ui/PianoRollComponent.cpp-981-        {
+src/ui/PianoRollComponent.cpp-982-            const auto& n = pattern.notes[(std::size_t) i];
+src/ui/PianoRollComponent.cpp-983-            if (! edits (n) || ! rows.shown (n.key) || n.slide) continue;
+src/ui/PianoRollComponent.cpp-984-            const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+src/ui/PianoRollComponent.cpp-985-            if (x0 + nw < (float) grid.getX() || x0 > (float) grid.getRight()) continue;
+src/ui/PianoRollComponent.cpp-986-            const auto baseY = (float) keyToY (n.key) + (float) rowHeight * 0.5f;
+src/ui/PianoRollComponent.cpp:987:            g.setColour (mpePitchMode ? accentHover : textPrimary.withAlpha (n.pitchCurve.empty() ? 0.35f : 0.78f));
+src/ui/PianoRollComponent.cpp:988:            if (n.pitchCurve.empty()) g.drawLine (x0 + 1.0f, baseY, x0 + nw - 1.0f, baseY, mpePitchMode ? 1.6f : 1.1f);
+src/ui/PianoRollComponent.cpp-989-            else
+src/ui/PianoRollComponent.cpp-990-            {
+src/ui/PianoRollComponent.cpp-991-                juce::Path pth;
+src/ui/PianoRollComponent.cpp-992-                auto ySt = [&] (float st) { return baseY - st * (float) rowHeight; };
+src/ui/PianoRollComponent.cpp-993-                pth.startNewSubPath (x0, ySt (evalPitchCurveCents (n.pitchCurve, 0.0) * 0.01f));
+src/ui/PianoRollComponent.cpp-994-                for (const auto& pt : n.pitchCurve) pth.lineTo (x0 + (float) pt.frac * nw, ySt (pt.semitones));
+src/ui/PianoRollComponent.cpp-995-                pth.lineTo (x0 + nw, ySt (evalPitchCurveCents (n.pitchCurve, 1.0) * 0.01f));
+src/ui/PianoRollComponent.cpp:996:                g.strokePath (pth, juce::PathStrokeType (mpePitchMode ? 2.2f : 1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+src/ui/PianoRollComponent.cpp:997:                if (mpePitchMode) for (int pi = 0; pi < (int) n.pitchCurve.size(); ++pi)
+src/ui/PianoRollComponent.cpp-998-                {
+src/ui/PianoRollComponent.cpp-999-                    const auto px = x0 + (float) n.pitchCurve[(std::size_t) pi].frac * nw, py = ySt (n.pitchCurve[(std::size_t) pi].semitones);
+src/ui/PianoRollComponent.cpp-1000-                    const auto act = (i == mpeNote && pi == mpePoint);
+src/ui/PianoRollComponent.cpp-1001-                    g.setColour (act ? textPrimary : accent);
+src/ui/PianoRollComponent.cpp-1002-                    g.fillEllipse (px - (act ? 5.0f : 3.5f), py - (act ? 5.0f : 3.5f), act ? 10.0f : 7.0f, act ? 10.0f : 7.0f);
+src/ui/PianoRollComponent.cpp-1003-                }
+--
+src/ui/PianoRollComponent.cpp-1688-    }
+src/ui/PianoRollComponent.cpp-1689-
+src/ui/PianoRollComponent.cpp-1690-    bool rightEdge = false, leftEdge = false;
+src/ui/PianoRollComponent.cpp-1691-    auto hit = noteAt (e.x, e.y, rightEdge, leftEdge);
+src/ui/PianoRollComponent.cpp-1692-    const auto tool = tools.getTool();
+src/ui/PianoRollComponent.cpp-1693-
+src/ui/PianoRollComponent.cpp:1694:    if (mpePitchMode && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+src/ui/PianoRollComponent.cpp-1695-    {
+src/ui/PianoRollComponent.cpp-1696-        const auto& notes = currentPattern (engine.getSong()).notes;
+src/ui/PianoRollComponent.cpp-1697-        int bestN = -1, bestP = -1;
+src/ui/PianoRollComponent.cpp-1698-        float bestD = e.source.isTouch() ? 26.0f : 14.0f;
+src/ui/PianoRollComponent.cpp-1699-        for (int i = (int) notes.size() - 1; i >= 0; --i)
+src/ui/PianoRollComponent.cpp-1700-        {
+=== CMakeLists.txt PopupMenu patch ===
+58-
+59-        string(REPLACE "${_radiant_juce_peer_contains_upstream}"
+60-                       "${_radiant_juce_peer_contains_fixed}"
+61-                       _radiant_juce_android_peer_source
+62-                       "${_radiant_juce_android_peer_source}")
+63-        file(WRITE "${RADIANT_JUCE_ANDROID_PEER_SOURCE}" "${_radiant_juce_android_peer_source}")
+64-    endif()
+65-
+66-    # JUCE opens a submenu after its hover timer sees the pointer over the parent row. Android touch has no persistent
+67-    # hover, so a normal tap on a submenu row can leave the parent menu open. Open the child menu on touch release.
+68:    set(RADIANT_JUCE_ANDROID_POPUP_SOURCE
+69-        "${juce_SOURCE_DIR}/modules/juce_gui_basics/menus/juce_PopupMenu.cpp")
+70:    if(NOT EXISTS "${RADIANT_JUCE_ANDROID_POPUP_SOURCE}")
+71:        message(FATAL_ERROR "Could not find JUCE popup menu source: ${RADIANT_JUCE_ANDROID_POPUP_SOURCE}")
+72-    endif()
+73-
+74:    file(READ "${RADIANT_JUCE_ANDROID_POPUP_SOURCE}" _radiant_juce_android_popup_source)
+75-    set(_radiant_juce_touch_submenu_upstream [=[        mouseUpCanTrigger |= true;
+76-    }
+77-
+78-    // Any move/drag after the menu is created]=])
+79-    set(_radiant_juce_touch_submenu_fixed [=[        mouseUpCanTrigger |= true;
+80-
+81-        if (e.source.isTouch() && ! isSubMenuVisible())
+82-            showSubMenuFor (currentChild);
+83-    }
+84-
+--
+88-    if(_radiant_juce_touch_submenu_fixed_pos EQUAL -1)
+89-        string(FIND "${_radiant_juce_android_popup_source}" "${_radiant_juce_touch_submenu_upstream}" _radiant_juce_touch_submenu_upstream_pos)
+90-        if(_radiant_juce_touch_submenu_upstream_pos EQUAL -1)
+91-            message(FATAL_ERROR "JUCE PopupMenu::mouseUp() changed; review the Android touch submenu patch")
+92-        endif()
+93-
+94-        string(REPLACE "${_radiant_juce_touch_submenu_upstream}"
+95-                       "${_radiant_juce_touch_submenu_fixed}"
+96-                       _radiant_juce_android_popup_source
+97-                       "${_radiant_juce_android_popup_source}")
+98:        file(WRITE "${RADIANT_JUCE_ANDROID_POPUP_SOURCE}" "${_radiant_juce_android_popup_source}")
+99-    endif()
+100-endif()
+101-
+102-set(RADIANT_ANDROID_APP_SOURCES
+103-    src/platform/FileTypes.cpp
+104-    src/platform/CrashGuard.cpp
+105-    src/platform/Paths.cpp
+106-    src/platform/Package.cpp
+107-    src/platform/NativeEmbed.cpp
+108-    src/platform/LinuxRealtime.cpp

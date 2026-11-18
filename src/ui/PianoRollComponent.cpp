@@ -284,8 +284,8 @@ PianoRollComponent::PianoRollComponent (AudioEngine& e)
     addAndMakeVisible (slideButton);
     mpePitchButton.setClickingTogglesState (true); mpePitchButton.setFlat (false);
     mpePitchButton.setOnColour (theme::colour::accent); mpePitchButton.setIconColourWhenOn (theme::colour::onAccent);
-    mpePitchButton.setTooltip (tr ("MPE Pitch mode: edit per-note pitch glide curves"));
-    mpePitchButton.onClick = [this] { mpePitchMode = mpePitchButton.getToggleState(); repaint(); };
+    mpePitchButton.setTooltip (tr ("MPE mode: select Pitch or Expression curves"));
+    mpePitchButton.onClick = [this] { showMpeModeMenu(); };
     addAndMakeVisible (mpePitchButton);
     ui::setQuickTip (chordBox, tr ("Chord stamp"));
     ui::setQuickTip (scaleBox, tr ("Scale"));
@@ -536,6 +536,23 @@ void PianoRollComponent::resized()
     overview.setBounds (keyboardWidth, toolbarHeight, getWidth() - keyboardWidth - scrollBarSize, overviewHeight);
     vBar.setBounds (getWidth() - scrollBarSize, headerHeight, scrollBarSize, getHeight() - headerHeight - velocityHeight);
     updateScrollBars();
+}
+
+void PianoRollComponent::updateMpeButton()
+{
+    if (mpeMode == MpeCurveMode::off) { mpePitchButton.setText ("MPE"); mpePitchButton.setToggleState (false, juce::dontSendNotification); }
+    else if (mpeMode == MpeCurveMode::pitch) { mpePitchButton.setText ("Pitch"); mpePitchButton.setToggleState (true, juce::dontSendNotification); }
+    else { mpePitchButton.setText ("Expr"); mpePitchButton.setToggleState (true, juce::dontSendNotification); }
+}
+
+void PianoRollComponent::showMpeModeMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem (tr ("Off (Normal editing)"), true, mpeMode == MpeCurveMode::off, [this] { mpeMode = MpeCurveMode::off; updateMpeButton(); repaint(); });
+    menu.addSeparator();
+    menu.addItem (tr ("MPE: Pitch curve (Coral)"), true, mpeMode == MpeCurveMode::pitch, [this] { mpeMode = MpeCurveMode::pitch; updateMpeButton(); repaint(); });
+    menu.addItem (tr ("MPE: Expression curve (Mint)"), true, mpeMode == MpeCurveMode::expression, [this] { mpeMode = MpeCurveMode::expression; updateMpeButton(); repaint(); });
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&mpePitchButton));
 }
 
 void PianoRollComponent::scrollToNotes (bool fitPattern)
@@ -984,21 +1001,48 @@ void PianoRollComponent::paint (juce::Graphics& g)
             const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
             if (x0 + nw < (float) grid.getX() || x0 > (float) grid.getRight()) continue;
             const auto baseY = (float) keyToY (n.key) + (float) rowHeight * 0.5f;
-            g.setColour (mpePitchMode ? accentHover : textPrimary.withAlpha (n.pitchCurve.empty() ? 0.35f : 0.78f));
-            if (n.pitchCurve.empty()) g.drawLine (x0 + 1.0f, baseY, x0 + nw - 1.0f, baseY, mpePitchMode ? 1.6f : 1.1f);
+            const auto pitchCol = juce::Colour (0xffff9933); // Coral for Pitch
+            const auto exprCol = juce::Colour (0xff28e0a0);  // Mint/Cyan for Expression
+            const auto ny0 = (float) keyToY (n.key) + 1.0f, nyh = (float) rowHeight - 2.0f;
+            auto yExp = [&] (float v) { return ny0 + (1.0f - juce::jlimit (0.0f, 1.0f, v)) * (nyh - 4.0f) + 2.0f; };
+            auto ySt = [&] (float st) { return baseY - st * (float) rowHeight; };
+
+            // Pitch curve (Coral)
+            g.setColour (mpeMode == MpeCurveMode::pitch ? pitchCol : pitchCol.withAlpha (n.pitchCurve.empty() ? 0.30f : 0.65f));
+            if (n.pitchCurve.empty())
+                g.drawLine (x0 + 1.0f, baseY, x0 + nw - 1.0f, baseY, mpeMode == MpeCurveMode::pitch ? 1.6f : 0.9f);
             else
             {
                 juce::Path pth;
-                auto ySt = [&] (float st) { return baseY - st * (float) rowHeight; };
                 pth.startNewSubPath (x0, ySt (evalPitchCurveCents (n.pitchCurve, 0.0) * 0.01f));
                 for (const auto& pt : n.pitchCurve) pth.lineTo (x0 + (float) pt.frac * nw, ySt (pt.semitones));
                 pth.lineTo (x0 + nw, ySt (evalPitchCurveCents (n.pitchCurve, 1.0) * 0.01f));
-                g.strokePath (pth, juce::PathStrokeType (mpePitchMode ? 2.2f : 1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-                if (mpePitchMode) for (int pi = 0; pi < (int) n.pitchCurve.size(); ++pi)
+                g.strokePath (pth, juce::PathStrokeType (mpeMode == MpeCurveMode::pitch ? 2.2f : 1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                if (mpeMode == MpeCurveMode::pitch) for (int pi = 0; pi < (int) n.pitchCurve.size(); ++pi)
                 {
                     const auto px = x0 + (float) n.pitchCurve[(std::size_t) pi].frac * nw, py = ySt (n.pitchCurve[(std::size_t) pi].semitones);
                     const auto act = (i == mpeNote && pi == mpePoint);
-                    g.setColour (act ? textPrimary : accent);
+                    g.setColour (act ? textPrimary : pitchCol);
+                    g.fillEllipse (px - (act ? 5.0f : 3.5f), py - (act ? 5.0f : 3.5f), act ? 10.0f : 7.0f, act ? 10.0f : 7.0f);
+                }
+            }
+
+            // Expression curve (Mint)
+            g.setColour (mpeMode == MpeCurveMode::expression ? exprCol : exprCol.withAlpha (n.exprCurve.empty() ? 0.25f : 0.65f));
+            if (n.exprCurve.empty())
+                g.drawLine (x0 + 1.0f, yExp (1.0f), x0 + nw - 1.0f, yExp (1.0f), mpeMode == MpeCurveMode::expression ? 1.6f : 0.9f);
+            else
+            {
+                juce::Path epth;
+                epth.startNewSubPath (x0, yExp (evalExprCurveValue (n.exprCurve, 0.0, 1.0f)));
+                for (const auto& pt : n.exprCurve) epth.lineTo (x0 + (float) pt.frac * nw, yExp (pt.value));
+                epth.lineTo (x0 + nw, yExp (evalExprCurveValue (n.exprCurve, 1.0, 1.0f)));
+                g.strokePath (epth, juce::PathStrokeType (mpeMode == MpeCurveMode::expression ? 2.2f : 1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                if (mpeMode == MpeCurveMode::expression) for (int pi = 0; pi < (int) n.exprCurve.size(); ++pi)
+                {
+                    const auto px = x0 + (float) n.exprCurve[(std::size_t) pi].frac * nw, py = yExp (n.exprCurve[(std::size_t) pi].value);
+                    const auto act = (i == mpeNote && pi == mpePoint);
+                    g.setColour (act ? textPrimary : exprCol);
                     g.fillEllipse (px - (act ? 5.0f : 3.5f), py - (act ? 5.0f : 3.5f), act ? 10.0f : 7.0f, act ? 10.0f : 7.0f);
                 }
             }
@@ -1691,7 +1735,62 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
     auto hit = noteAt (e.x, e.y, rightEdge, leftEdge);
     const auto tool = tools.getTool();
 
-    if (mpePitchMode && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+    if (mpeMode == MpeCurveMode::expression && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
+    {
+        const auto& notes = currentPattern (engine.getSong()).notes;
+        int bestN = -1, bestP = -1; float bestD = e.source.isTouch() ? 26.0f : 14.0f;
+        for (int i = (int) notes.size() - 1; i >= 0; --i) {
+            const auto& n = notes[(std::size_t) i];
+            if (! edits (n) || ! rows.shown (n.key) || n.slide) continue;
+            const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+            if ((float) e.x < x0 - 10.0f || (float) e.x > x0 + nw + 10.0f) continue;
+            const auto ny0 = (float) keyToY (n.key) + 1.0f, nyh = (float) rowHeight - 2.0f;
+            auto yExp = [&] (float v) { return ny0 + (1.0f - juce::jlimit (0.0f, 1.0f, v)) * (nyh - 4.0f) + 2.0f; };
+            for (int pi = 0; pi < (int) n.exprCurve.size(); ++pi) {
+                const auto d = std::hypot ((float) e.x - (x0 + (float) n.exprCurve[(std::size_t) pi].frac * nw), (float) e.y - yExp (n.exprCurve[(std::size_t) pi].value));
+                if (d < bestD) { bestD = d; bestN = i; bestP = pi; }
+            }
+            if (bestP < 0) {
+                const auto f = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
+                const auto d = std::abs ((float) e.y - yExp (evalExprCurveValue (n.exprCurve, f, 1.0f)));
+                if (d < bestD) { bestD = d; bestN = i; bestP = -1; }
+            }
+        }
+        if (bestN >= 0) {
+            const auto nowMs = juce::Time::getMillisecondCounter();
+            if (bestP >= 0 && (nowMs - mpeLastTapMs) < 380 && e.getPosition().getDistanceFrom (mpeLastTapPos) < 22) {
+                mpeLastTapMs = 0;
+                editNotes ([bestN, bestP] (Pattern& pat) {
+                    if (bestN < (int) pat.notes.size()) {
+                        auto& c = pat.notes[(std::size_t) bestN].exprCurve;
+                        if (bestP < (int) c.size()) c.erase (c.begin() + bestP);
+                        if (c.size() <= 1) c.clear();
+                    }
+                });
+                repaint(); return;
+            }
+            mpeLastTapMs = nowMs; mpeLastTapPos = e.getPosition();
+            drag = Drag::mpeExpr; mpeNote = bestN; mpePoint = bestP; mpeDrawing = false; mpeLastFrac = -1.0;
+            editNotes ([this, pos = e.getPosition()] (Pattern& pat) {
+                if (mpeNote < 0 || mpeNote >= (int) pat.notes.size()) return;
+                auto& n = pat.notes[(std::size_t) mpeNote];
+                const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+                const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) pos.x - x0) / (double) nw);
+                const auto ny0 = (float) keyToY (n.key) + 1.0f, nyh = (float) rowHeight - 2.0f;
+                const float val = juce::jlimit (0.0f, 1.0f, 1.0f - ((float) pos.y - (ny0 + 2.0f)) / juce::jmax (1.0f, nyh - 4.0f));
+                if (mpePoint < 0) {
+                    if (n.exprCurve.empty()) { n.exprCurve.push_back ({ 0.0, 1.0f }); n.exprCurve.push_back ({ frac >= 0.72 ? 1.0 : frac, val }); }
+                    else n.exprCurve.push_back ({ frac, val });
+                    std::sort (n.exprCurve.begin(), n.exprCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    for (int k = 0; k < (int) n.exprCurve.size(); ++k) if (std::abs (n.exprCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
+                    mpeLastFrac = frac;
+                }
+                else if (mpePoint < (int) n.exprCurve.size()) n.exprCurve[(std::size_t) mpePoint].value = val;
+            }, true);
+            repaint(); return;
+        }
+    }
+    if (mpeMode == MpeCurveMode::pitch && ! e.mods.isRightButtonDown() && ! flmods::ctrl (e.mods))
     {
         const auto& notes = currentPattern (engine.getSong()).notes;
         int bestN = -1, bestP = -1;
@@ -2287,6 +2386,33 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
             drumPaintAt (e.getPosition(), snapOn);
             return;
 
+        case Drag::mpeExpr:
+        {
+            editNotes ([this, e] (Pattern& pat) {
+                if (mpeNote < 0 || mpeNote >= (int) pat.notes.size()) return;
+                auto& n = pat.notes[(std::size_t) mpeNote];
+                const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
+                const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
+                const auto ny0 = (float) keyToY (n.key) + 1.0f, nyh = (float) rowHeight - 2.0f;
+                const float val = juce::jlimit (0.0f, 1.0f, 1.0f - ((float) e.y - (ny0 + 2.0f)) / juce::jmax (1.0f, nyh - 4.0f));
+                if (mpePoint < 0 && mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12) {
+                    mpeDrawing = true;
+                    const auto lo = std::min (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
+                    const auto hi = std::max (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
+                    n.exprCurve.erase (std::remove_if (n.exprCurve.begin(), n.exprCurve.end(), [lo, hi] (const NoteCurvePoint& pt) { return pt.frac > lo + 0.005 && pt.frac < hi - 0.005; }), n.exprCurve.end());
+                    n.exprCurve.push_back ({ frac, val });
+                    std::sort (n.exprCurve.begin(), n.exprCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    mpeLastFrac = frac; mpePoint = -1;
+                }
+                else if (mpePoint >= 0 && mpePoint < (int) n.exprCurve.size()) {
+                    n.exprCurve[(std::size_t) mpePoint].frac = frac;
+                    n.exprCurve[(std::size_t) mpePoint].value = val;
+                    std::sort (n.exprCurve.begin(), n.exprCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
+                    for (int k = 0; k < (int) n.exprCurve.size(); ++k) if (std::abs (n.exprCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
+                }
+            }, false);
+            repaint(); return;
+        }
         case Drag::mpePitch:
         {
             editNotes ([this, e, snapOn] (Pattern& pat) {
@@ -2468,7 +2594,7 @@ void PianoRollComponent::postDragHint (const juce::MouseEvent& e)
 
     switch (drag)
     {
-        case Drag::mpePitch: break;
+        case Drag::mpePitch: case Drag::mpeExpr: break;
         case Drag::move:
         {
             const auto at = (std::size_t) (std::find (dragIndices.begin(), dragIndices.end(), dragNote) - dragIndices.begin());

@@ -423,7 +423,17 @@ void PluginInstrument::noteOn (int key, float velocity) noexcept
 
 void PluginInstrument::voiceProperty (int key, int prop, float value) noexcept
 {
-    if (prop != 1 || ! std::isfinite (value)) return;
+    if (! std::isfinite (value)) return;
+    const auto k = juce::jlimit (0, 127, key);
+    const int ch = mpeKeyCh[k] > 1 ? mpeKeyCh[k] : 1;
+    if (prop == 0)
+    {
+        const auto v7 = juce::jlimit (0, 127, juce::roundToInt (juce::jlimit (0.0f, 1.0f, value) * 127.0f));
+        midi.addEvent (juce::MidiMessage::controllerEvent (ch, 11, v7), 0);
+        midi.addEvent (juce::MidiMessage::channelPressureChange (ch, v7), 0);
+        return;
+    }
+    if (prop != 1) return;
     const auto k = juce::jlimit (0, 127, key);
     const int ch = mpeKeyCh[k] > 1 ? mpeKeyCh[k] : 1;
     const auto range = (float) juce::jlimit (1, 48, options.bendRange);
