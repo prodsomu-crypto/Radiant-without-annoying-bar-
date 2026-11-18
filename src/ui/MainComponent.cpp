@@ -652,14 +652,8 @@ MainComponent::MainComponent (AudioEngine& e, bool restoreUserSettings)
     refreshToolbar();
     refreshPanelButtons();
     setToolbarLayout (toolbarLayout, false); // icon sizes and row height (loaded with the UI options)
-#if JUCE_ANDROID
-    // Enlarge the JUCE editor surface by 10% on Android. The Compose title bar stays at platform size.
-    toolbarLayout.uiScale = 110;
-    juce::Desktop::getInstance().setGlobalScaleFactor (1.10f);
-#else
     if (persistent && toolbarLayout.uiScale != 100)
         juce::Desktop::getInstance().setGlobalScaleFactor ((float) toolbarLayout.uiScale / 100.0f);
-#endif
 
     setControlHints();
     fittedChannelCount = (int) engine.getSong().channels.size();
