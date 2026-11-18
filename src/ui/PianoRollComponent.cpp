@@ -2319,38 +2319,6 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
             return;
         }
 
-        case Drag::mpePitch:
-        {
-            editNotes ([this, e, snapOn] (Pattern& pat) {
-                if (mpeNote < 0 || mpeNote >= (int) pat.notes.size()) return;
-                auto& n = pat.notes[(std::size_t) mpeNote];
-                const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
-                const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
-                float st = juce::jlimit (-24.0f, 24.0f, ((float) keyToY (n.key) + (float) rowHeight * 0.5f - (float) e.y) / (float) rowHeight);
-                if (snapOn && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
-                if (mpeDrawing || (mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12))
-                {
-                    mpeDrawing = true;
-                    const auto lo = std::min (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
-                    const auto hi = std::max (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
-                    n.pitchCurve.erase (std::remove_if (n.pitchCurve.begin(), n.pitchCurve.end(),
-                        [lo, hi] (const NotePitchPoint& pt) { return pt.frac > lo + 0.005 && pt.frac < hi - 0.005; }), n.pitchCurve.end());
-                    n.pitchCurve.push_back ({ frac, st });
-                    std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
-                    mpeLastFrac = frac; mpePoint = -1;
-                }
-                else if (mpePoint >= 0 && mpePoint < (int) n.pitchCurve.size())
-                {
-                    n.pitchCurve[(std::size_t) mpePoint].frac = frac;
-                    n.pitchCurve[(std::size_t) mpePoint].semitones = st;
-                    std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
-                    for (int k = 0; k < (int) n.pitchCurve.size(); ++k) if (std::abs (n.pitchCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
-                }
-            }, false);
-            repaint();
-            return;
-        }
-
         case Drag::stretch:
         {
             if (dragOriginals.empty() || stretchEnd <= stretchAnchor)
