@@ -53,6 +53,7 @@ struct NoteEvent
     float gain = 1.0f;
     std::uint8_t prop = 0;  // voiceProp: the vfx::Prop
     std::int8_t colour = 0; // the note's colour group 0…15 (FL's note colours: VFX Color Mapper, round 164b)
+    std::int8_t mpeChannel = -1; // 0-based MPE member MIDI channel (1…15); -1 = ordinary channel voice
     // A VFX channel (round 164b): −1 = an ordinary note; −2 = one its processor takes (it goes nowhere else); N ≥ 0 =
     // what the processor sent on MIDI port N (only the routes on that port take it)
     std::int16_t port = -1;
@@ -117,6 +118,7 @@ private:
     struct Entry
     {
         int channel = 0, key = 0;
+        std::int8_t mpeChannel = -1;
         double end = 0.0; // on `clock`; +inf = its "off" comes from the scheduler only
     };
     std::array<Entry, capacity> entries {};
