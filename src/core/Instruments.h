@@ -174,6 +174,11 @@ public:
     // note-on —, 1 pitch in cents from the key, 2 pan −1..1, 3 Mod X, 4 Mod Y). Ignored if unsupported.
     virtual bool hasVoicePitch() const noexcept { return false; }
     virtual void voiceProperty (int /*key*/, int /*prop*/, float /*value*/) noexcept {}
+    // Per-note MPE entry points. Member channels are zero-based MIDI channels 1…15; native voices may ignore the
+    // channel and address their own voice by key, while hosted MIDI instruments use it for independent pitch bend.
+    virtual void noteOnMpe (int key, float velocity, int /*memberChannel*/, double startSeconds) noexcept { noteOnAt (key, velocity, startSeconds); }
+    virtual void noteOffMpe (int key, int /*memberChannel*/) noexcept { noteOff (key); }
+    virtual void pitchMpe (int key, float cents, int /*memberChannel*/) noexcept { voiceProperty (key, 1, cents); }
     // The same for a voice that arrived on MIDI port `port` (a Channel Rack VFX's output, round 165c): a Patcher passes
     // it to what that port reaches; hosted plugins cannot take it (MIDI has no per-voice properties).
     virtual void voicePropertyPort (int /*port*/, int /*key*/, int /*prop*/, float /*value*/, int /*midiChannel*/) noexcept {}
