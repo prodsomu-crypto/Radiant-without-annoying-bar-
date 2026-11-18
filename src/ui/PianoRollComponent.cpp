@@ -2500,6 +2500,7 @@ void PianoRollComponent::postDragHint (const juce::MouseEvent& e)
 
     switch (drag)
     {
+        case Drag::mpePitch: break;
         case Drag::move:
         {
             const auto at = (std::size_t) (std::find (dragIndices.begin(), dragIndices.end(), dragNote) - dragIndices.begin());
