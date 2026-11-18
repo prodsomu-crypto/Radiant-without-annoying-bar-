@@ -1088,9 +1088,6 @@ public:
         if (prop == 1 && std::isfinite (value))
             for (auto& v : voices)
                 if (v.active && ! v.released && v.key == key) { v.slideCents = value; v.slideLeft = 0; }
-        else if (prop == 0 && std::isfinite (value))
-            for (auto& v : voices)
-                if (v.active && ! v.released && v.key == key) v.gainBase = std::clamp (value, 0.0f, 1.0f);
     }
     void pitchBend (float) noexcept override {} // (it bends by the raw MIDI pitch bend, midiMessage)
 

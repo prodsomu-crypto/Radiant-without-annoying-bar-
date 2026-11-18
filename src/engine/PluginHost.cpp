@@ -408,50 +408,24 @@ void PluginInstrument::noteOn (int key, float velocity) noexcept
         glide.taken = true;
     }
     addBend (0);
-    int ch = 1;
-    for (int t = 0; t < 15; ++t) { const int c = 1 + ((mpeNextCh - 1 + t) % 15); if (! mpeBusy[c]) { ch = c + 1; mpeBusy[c] = true; mpeNextCh = 1 + (c % 15); break; } }
-    if (ch == 1) { ch = mpeNextCh + 1; mpeNextCh = 1 + (mpeNextCh % 15); }
-    mpeKeyCh[k] = ch;
-    midi.addEvent (juce::MidiMessage::pitchWheel (ch, 8192), 0);
-    midi.addEvent (juce::MidiMessage::noteOn (ch, k, juce::jlimit (0.0f, 1.0f, velocity)), 0);
-    hold (ch - 1, k, true);
+    midi.addEvent (juce::MidiMessage::noteOn (1, k, juce::jlimit (0.0f, 1.0f, velocity)), 0);
+    hold (0, k, true);
     // FL's "Send MOD X as polyphonic aftertouch": the note's Mod X right after its note on
     if (options.modXAftertouch)
         midi.addEvent (juce::MidiMessage::aftertouchChange (1, k, juce::jlimit (0, 127, juce::roundToInt (nextModX * 127.0f))), 0);
     nextModX = 0.5f;
 }
 
-void PluginInstrument::voiceProperty (int key, int prop, float value) noexcept
-{
-    if (! std::isfinite (value)) return;
-    const auto k = juce::jlimit (0, 127, key);
-    const int ch = mpeKeyCh[k] > 1 ? mpeKeyCh[k] : 1;
-    if (prop == 0)
-    {
-        const auto v7 = juce::jlimit (0, 127, juce::roundToInt (juce::jlimit (0.0f, 1.0f, value) * 127.0f));
-        midi.addEvent (juce::MidiMessage::controllerEvent (ch, 11, v7), 0);
-        midi.addEvent (juce::MidiMessage::channelPressureChange (ch, v7), 0);
-        return;
-    }
-    if (prop != 1) return;
-    const auto k = juce::jlimit (0, 127, key);
-    const int ch = mpeKeyCh[k] > 1 ? mpeKeyCh[k] : 1;
-    const auto range = (float) juce::jlimit (1, 48, options.bendRange);
-    const auto bw = juce::jlimit (0, 16383, 8192 + juce::roundToInt (juce::jlimit (-1.0f, 1.0f, (value / 100.0f) / range) * 8191.0f));
-    midi.addEvent (juce::MidiMessage::pitchWheel (ch, bw), 0);
-}
-
 void PluginInstrument::noteOff (int key) noexcept
 {
     const auto k = juce::jlimit (0, 127, key);
-    const int ch = mpeKeyCh[k] > 1 ? mpeKeyCh[k] : 1;
+    // FL's "Send note release velocity" (on by default): the note's release velocity, else 0
     if (options.releaseVelocity)
-        midi.addEvent (juce::MidiMessage::noteOff (ch, k, juce::jlimit (0.0f, 1.0f, nextRelease)), 0);
+        midi.addEvent (juce::MidiMessage::noteOff (1, k, juce::jlimit (0.0f, 1.0f, nextRelease)), 0);
     else
-        midi.addEvent (juce::MidiMessage::noteOff (ch, k), 0);
-    if (ch > 1) { midi.addEvent (juce::MidiMessage::pitchWheel (ch, 8192), 0); mpeBusy[ch - 1] = false; mpeKeyCh[k] = 0; }
+        midi.addEvent (juce::MidiMessage::noteOff (1, k), 0);
     nextRelease = 0.5f;
-    hold (ch - 1, k, false);
+    hold (0, k, false);
 }
 
 void PluginInstrument::allNotesOff() noexcept
@@ -460,8 +434,6 @@ void PluginInstrument::allNotesOff() noexcept
     // host passes a controller only as the parameter the plugin maps it to, and drops it otherwise), so a jump while
     // playing left SynthMaster's notes sounding under the chased ones: doubled notes, a sequence out of time
     releaseHeldKeys();
-    for (auto& b : mpeBusy) b = false;
-    for (auto& c : mpeKeyCh) c = 0;
     midi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
     midi.addEvent (juce::MidiMessage::allSoundOff (1), 0);
 }

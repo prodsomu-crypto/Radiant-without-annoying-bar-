@@ -74,28 +74,14 @@ using NoteTiming = PlayedTiming;
 NoteTiming noteTiming (const Note& note, float swing, const ChannelDef* c) noexcept { return playedTiming (note, swing, c); }
 
 template <typename EmitFn>
-void emitMpeExpr (const Note& note, double startTick, std::int64_t lenTicks, double tps, EmitFn&& emit) noexcept
-{
-    if (note.slide || note.exprCurve.empty() || lenTicks <= 0) return;
-    const auto steps = std::clamp ((int) std::ceil ((double) lenTicks / std::max (8.0, tps * 64.0)), 2, 128);
-    for (int s = 0; s <= steps; ++s)
-    {
-        const auto frac = (double) s / (double) steps;
-        NoteEvent vp; vp.type = NoteEvent::Type::voiceProp; vp.channel = note.channel; vp.key = note.key;
-        vp.prop = (std::uint8_t) vfx::Prop::velocity;
-        vp.velocity = evalExprCurveValue (note.exprCurve, frac, 1.0f);
-        emit (startTick + frac * (double) (lenTicks - 1), vp);
-    }
-}
-
-template <typename EmitFn>
 void emitMpeExpr (const Note& note, double startTick, std::int64_t lenTicks, double tps, EmitFn&& emit) noexcept {
     if (note.slide || note.exprCurve.empty() || lenTicks <= 0) return;
     const auto steps = std::clamp ((int) std::ceil ((double) lenTicks / std::max (8.0, tps * 64.0)), 2, 128);
     for (int s = 0; s <= steps; ++s) {
         const auto frac = (double) s / (double) steps;
         NoteEvent vp; vp.type = NoteEvent::Type::voiceProp; vp.channel = note.channel; vp.key = note.key;
-        vp.prop = (std::uint8_t) vfx::Prop::velocity; vp.velocity = evalExprCurveValue (note.exprCurve, frac, 1.0f);
+        vp.prop = (std::uint8_t) vfx::Prop::velocity;
+        vp.velocity = evalExprCurveValue (note.exprCurve, frac, 1.0f);
         emit (startTick + frac * (double) (lenTicks - 1), vp);
     }
 }

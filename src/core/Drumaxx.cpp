@@ -1326,12 +1326,6 @@ public:
             if (keyDown[(std::size_t) k])
                 keySlide[(std::size_t) k].start ((float) (to - (100.0 * (k - 60) + keyCents[(std::size_t) k])), samples);
     }
-    bool hasVoicePitch() const noexcept override { return true; }
-    void voiceProperty (int key, int prop, float value) noexcept override {
-        if (prop != 1 || ! std::isfinite (value)) return;
-        const int k = std::clamp (key, 0, 127);
-        if (keyDown[(std::size_t) k]) keySlide[(std::size_t) k].start (value + keySlide[(std::size_t) k].liveApplied, 1.0f);
-    }
     void setChannelPitchNow (float knob, float rest) noexcept override
     {
         live.set (knob, rest);

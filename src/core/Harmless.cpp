@@ -1157,9 +1157,6 @@ public:
 
     // adds n (≤ maxHostBlock) samples; channelVol / channelPan: FL's chan.Vol and chan.Pan this block
     // a slide note (issue #14): the sounding, unreleased notes glide to `to` (Final.Pitch, cents) over `samples`
-    void voicePitch (int key, float cents) noexcept {
-        for (const auto ni : order) if (auto& nt = notes[(std::size_t) ni]; nt.key == key && ! nt.released && ! nt.ghost && nt.count > 0) nt.slide.start (cents + nt.slide.liveApplied, 1.0f);
-    }
     void slideTo (double to, float samples) noexcept
     {
         for (const auto ni : order)
@@ -2304,11 +2301,6 @@ public:
     }
 
     bool followsChannelPorta() const noexcept override { return true; } // (round 168l: HostSlide::anchor)
-    bool hasVoicePitch() const noexcept override { return true; }
-    void voiceProperty (int key, int prop, float value) noexcept override {
-        if (prop != 1 || ! std::isfinite (value)) return;
-        take(); engine.voicePitch (key, value);
-    }
     void slideTo (int key, float cents, float samples) noexcept override
     {
         take();

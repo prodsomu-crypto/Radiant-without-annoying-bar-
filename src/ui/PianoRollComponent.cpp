@@ -1001,8 +1001,8 @@ void PianoRollComponent::paint (juce::Graphics& g)
             const auto x0 = (float) tickToX ((double) n.start), nw = juce::jmax (4.0f, (float) (n.length * pixelsPerTick) - 1.0f);
             if (x0 + nw < (float) grid.getX() || x0 > (float) grid.getRight()) continue;
             const auto baseY = (float) keyToY (n.key) + (float) rowHeight * 0.5f;
-            const auto pitchCol = juce::Colour (0xffff9933); // Coral for Pitch
-            const auto exprCol = juce::Colour (0xff28e0a0);  // Mint/Cyan for Expression
+            const auto pitchCol = juce::Colour (0xffff9933);
+            const auto exprCol = juce::Colour (0xff28e0a0);
             const auto ny0 = (float) keyToY (n.key) + 1.0f, nyh = (float) rowHeight - 2.0f;
             auto yExp = [&] (float v) { return ny0 + (1.0f - juce::jlimit (0.0f, 1.0f, v)) * (nyh - 4.0f) + 2.0f; };
             auto ySt = [&] (float st) { return baseY - st * (float) rowHeight; };
@@ -1011,15 +1011,12 @@ void PianoRollComponent::paint (juce::Graphics& g)
             g.setColour (mpeMode == MpeCurveMode::pitch ? pitchCol : pitchCol.withAlpha (n.pitchCurve.empty() ? 0.30f : 0.65f));
             if (n.pitchCurve.empty())
                 g.drawLine (x0 + 1.0f, baseY, x0 + nw - 1.0f, baseY, mpeMode == MpeCurveMode::pitch ? 1.6f : 0.9f);
-            else
-            {
-                juce::Path pth;
-                pth.startNewSubPath (x0, ySt (evalPitchCurveCents (n.pitchCurve, 0.0) * 0.01f));
+            else {
+                juce::Path pth; pth.startNewSubPath (x0, ySt (evalPitchCurveCents (n.pitchCurve, 0.0) * 0.01f));
                 for (const auto& pt : n.pitchCurve) pth.lineTo (x0 + (float) pt.frac * nw, ySt (pt.semitones));
                 pth.lineTo (x0 + nw, ySt (evalPitchCurveCents (n.pitchCurve, 1.0) * 0.01f));
                 g.strokePath (pth, juce::PathStrokeType (mpeMode == MpeCurveMode::pitch ? 2.2f : 1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-                if (mpeMode == MpeCurveMode::pitch) for (int pi = 0; pi < (int) n.pitchCurve.size(); ++pi)
-                {
+                if (mpeMode == MpeCurveMode::pitch) for (int pi = 0; pi < (int) n.pitchCurve.size(); ++pi) {
                     const auto px = x0 + (float) n.pitchCurve[(std::size_t) pi].frac * nw, py = ySt (n.pitchCurve[(std::size_t) pi].semitones);
                     const auto act = (i == mpeNote && pi == mpePoint);
                     g.setColour (act ? textPrimary : pitchCol);
@@ -1031,15 +1028,12 @@ void PianoRollComponent::paint (juce::Graphics& g)
             g.setColour (mpeMode == MpeCurveMode::expression ? exprCol : exprCol.withAlpha (n.exprCurve.empty() ? 0.25f : 0.65f));
             if (n.exprCurve.empty())
                 g.drawLine (x0 + 1.0f, yExp (1.0f), x0 + nw - 1.0f, yExp (1.0f), mpeMode == MpeCurveMode::expression ? 1.6f : 0.9f);
-            else
-            {
-                juce::Path epth;
-                epth.startNewSubPath (x0, yExp (evalExprCurveValue (n.exprCurve, 0.0, 1.0f)));
+            else {
+                juce::Path epth; epth.startNewSubPath (x0, yExp (evalExprCurveValue (n.exprCurve, 0.0, 1.0f)));
                 for (const auto& pt : n.exprCurve) epth.lineTo (x0 + (float) pt.frac * nw, yExp (pt.value));
                 epth.lineTo (x0 + nw, yExp (evalExprCurveValue (n.exprCurve, 1.0, 1.0f)));
                 g.strokePath (epth, juce::PathStrokeType (mpeMode == MpeCurveMode::expression ? 2.2f : 1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-                if (mpeMode == MpeCurveMode::expression) for (int pi = 0; pi < (int) n.exprCurve.size(); ++pi)
-                {
+                if (mpeMode == MpeCurveMode::expression) for (int pi = 0; pi < (int) n.exprCurve.size(); ++pi) {
                     const auto px = x0 + (float) n.exprCurve[(std::size_t) pi].frac * nw, py = yExp (n.exprCurve[(std::size_t) pi].value);
                     const auto act = (i == mpeNote && pi == mpePoint);
                     g.setColour (act ? textPrimary : exprCol);
@@ -1843,7 +1837,7 @@ void PianoRollComponent::mouseDown (const juce::MouseEvent& e)
                 if (snapS && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
                 if (mpePoint < 0)
                 {
-                    if (n.pitchCurve.empty()) { n.pitchCurve.push_back ({ 0.0, 0.0f }); n.pitchCurve.push_back ({ frac >= 0.72 ? 1.0 : frac, st }); }
+                    if (n.pitchCurve.empty()) { if (frac > 0.04) n.pitchCurve.push_back ({ 0.0, 0.0f }); n.pitchCurve.push_back ({ frac, st }); if (frac < 0.96) n.pitchCurve.push_back ({ 1.0, 0.0f }); }
                     else n.pitchCurve.push_back ({ frac, st });
                     std::sort (n.pitchCurve.begin(), n.pitchCurve.end(), [] (auto& a, auto& b) { return a.frac < b.frac; });
                     for (int k = 0; k < (int) n.pitchCurve.size(); ++k) if (std::abs (n.pitchCurve[(std::size_t) k].frac - frac) < 1e-6) { mpePoint = k; break; }
@@ -2422,7 +2416,7 @@ void PianoRollComponent::mouseDrag (const juce::MouseEvent& e)
                 const auto frac = juce::jlimit (0.0, 1.0, (double) ((float) e.x - x0) / (double) nw);
                 float st = juce::jlimit (-24.0f, 24.0f, ((float) keyToY (n.key) + (float) rowHeight * 0.5f - (float) e.y) / (float) rowHeight);
                 if (snapOn && std::abs (st - std::round (st)) < 0.16f) st = std::round (st);
-                if (mpePoint < 0 && mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12)
+                if (mpeDrawing || (mpeLastFrac >= 0.0 && std::abs (e.getDistanceFromDragStartX()) > 12))
                 {
                     mpeDrawing = true;
                     const auto lo = std::min (mpeLastFrac < 0.0 ? frac : mpeLastFrac, frac);
@@ -2613,6 +2607,14 @@ void PianoRollComponent::postDragHint (const juce::MouseEvent& e)
                 return;
             hint.text = tr ("Resizing {0} note(s)  [Alt] no snap", { count });
             hint.value = juce::String ((double) notes[(std::size_t) dragNote].length / ticksPerStep, 2) + " " + tr ("steps");
+            break;
+        case Drag::mpeExpr:
+            if (mpeNote >= 0 && mpeNote < (int) notes.size()) {
+                const auto& n = notes[(std::size_t) mpeNote];
+                const auto v = (mpePoint >= 0 && mpePoint < (int) n.exprCurve.size()) ? n.exprCurve[(std::size_t) mpePoint].value : 1.0f;
+                hint.text = tr ("MPE Expression curve: drag points or draw along note (double-tap point to delete)");
+                hint.value = juce::String (juce::roundToInt (v * 100.0f)) + "%";
+            }
             break;
         case Drag::laneResize:
             hint.text = tr ("Resizing controller lane");

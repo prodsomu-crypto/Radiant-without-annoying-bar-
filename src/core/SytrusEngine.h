@@ -85,7 +85,6 @@ public:
     void releaseKey (int key) noexcept;        // releases the held notes of a key
     // a slide note (issue #14): the unreleased voices glide to `toCents` (Final.Pitch, cents from C5) over `samples`
     void slideTo (double toCents, float samples) noexcept;
-    void voicePitch (int key, float cents) noexcept;
     // FL's PITCH knob and main pitch, live (round 167a): the channel pitch the next note starts with (knob + fine tune +
     // main pitch, cents), and the channel's pitch now (every voice moves to it at once)
     void setNextLiveRef (float ref) noexcept;

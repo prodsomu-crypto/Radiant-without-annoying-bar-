@@ -2164,9 +2164,6 @@ public:
 
     // one host block (n ≤ maxHostBlock): adds to out
     // a slide note (issue #14): the held voices glide to `to` (Final.Pitch, cents from C5) over `samples`
-    void voicePitch (int key, float cents) noexcept {
-        for (auto* v : order) if (v->lynxKey == key && ! v->lynxReleased && ! v->dead) v->slide.start (cents + v->slide.liveApplied, 1.0f);
-    }
     void slideTo (double to, float samples) noexcept
     {
         for (auto* v : order)
@@ -3811,11 +3808,6 @@ public:
         take();
         if (engine != nullptr)
             engine->slideTo (100.0 * std::clamp (key, 0, 127) - 6000.0 + (double) channelCents.load() + (double) cents, samples);
-    }
-    bool hasVoicePitch() const noexcept override { return true; }
-    void voiceProperty (int key, int prop, float value) noexcept override {
-        if (prop != 1 || ! std::isfinite (value)) return;
-        take(); if (engine != nullptr) engine->voicePitch (key, value);
     }
 
     void noteOff (int key) noexcept override
